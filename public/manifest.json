@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "AI Sidekick",
+  "version": "1.0",
+  "description": "A React-based Chrome extension sidebar.",
+  "permissions": ["sidePanel", "storage", "activeTab", "scripting", "<all_urls>", "tabs"],
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Open AI Sidekick"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
