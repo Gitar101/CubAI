@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import ShapeBlur from './ShapeBlur';
-import TextType from './type';
+import ShinyText from './ShinyText';
+import SilkBackground from './SilkBackground.jsx';
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 function App() {
@@ -27,7 +27,7 @@ function App() {
     });
 
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?key=${GEMINI_API_KEY}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?key=${GEMINI_API_KEY}`;
       const headers = { 'Content-Type': 'application/json' };
 
       // Inject hidden system context (transcript) at the start so it persists in-thread
@@ -159,7 +159,7 @@ function App() {
   }, []);
 
   // Removed "ask a follow up question" flow. Normal chat now covers this.
-
+ 
   const handleCaptureClick = () => {
     chrome.runtime.sendMessage({ action: "captureImage" }, (response) => {
       if (chrome.runtime.lastError) {
@@ -173,18 +173,13 @@ function App() {
       setCapturedImage(response.dataUrl);
     });
   };
-
+ 
+  // Restore send flow with curved input
   const handleSend = () => {
     if (!inputValue.trim() && !capturedImage) return;
-
     const content = [];
-    if (capturedImage) {
-      content.push({ type: 'image', url: capturedImage });
-    }
-    if (inputValue.trim()) {
-      content.push({ type: 'text', text: inputValue });
-    }
-
+    if (capturedImage) content.push({ type: 'image', url: capturedImage });
+    if (inputValue.trim()) content.push({ type: 'text', text: inputValue });
     const newUserMessage = { id: messageIdCounter, role: 'user', content };
     const updatedMessages = [...messages, newUserMessage];
     setMessages(updatedMessages);
@@ -193,32 +188,25 @@ function App() {
     setInputValue('');
     setCapturedImage(null);
   };
-
-  const handleInputChange = (e) => {
-    setInputValue(e.target.value);
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      handleSend();
-    }
-  };
-
+  const handleInputChange = (e) => setInputValue(e.target.value);
+  const handleKeyPress = (e) => { if (e.key === 'Enter') handleSend(); };
+ 
   return (
-    <div className="app-container">
-      <div className="orb-background">
-        <ShapeBlur />
-      </div>
-      <header className="header">
-        <TextType 
-  text={["CubAI"]}
-  typingSpeed={170}
-  pauseDuration={1500}
-  showCursor={true}
-  cursorCharacter="|"
-/>
+    <div className="app-container" style={{ position: 'relative', minHeight: '100vh' }}>
+      {/* Background shader fixed to viewport */}
+      <SilkBackground
+        speed={5}
+        scale={1}
+        color="#7B7481"
+        noiseIntensity={1.5}
+        rotation={0}
+      />
+
+      <header className="header" style={{ position: 'relative', zIndex: 1 }}>
+        <ShinyText text="CubAI" speed={5} />
       </header>
-      <main className="main-content">
+
+      <main className="main-content" style={{ position: 'relative', zIndex: 1 }}>
         <div className="chat-area">
           {/* Only one rendering path for the summary: either as a pinned block OR as part of chat.
               To avoid duplicated visual content, we will NOT pin if the latest AI message already equals summary. */}
@@ -250,39 +238,32 @@ function App() {
           {error && <div className="message error-message">{error}</div>}
         </div>
       </main>
-      <footer className="input-area">
-        <div className="input-wrapper">
-          {capturedImage && (
-            <div className="thumbnail-container">
-              <img src={capturedImage} alt="Captured thumbnail" className="thumbnail" />
-              <button onClick={() => setCapturedImage(null)} className="remove-thumbnail-button">
-                &times;
-              </button>
-            </div>
-          )}
+
+      {/* Floating curved input with placeholder, image and send buttons */}
+      <div className="floating-input-bar" style={{ position: 'fixed', left: 0, right: 0, bottom: 16, display: 'flex', justifyContent: 'center', zIndex: 2 }}>
+        <div className="curved-input-wrapper" style={{ width: '92%', maxWidth: 820, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button className="icon-button photo" onClick={handleCaptureClick} disabled={isLoading || Boolean(capturedImage)} aria-label="Capture image">
+            <svg viewBox="0 0 24 24">
+              <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+            </svg>
+          </button>
           <input
             type="text"
-            className="text-input"
+            className="text-input curved opaque"
             placeholder="Ask anything..."
             value={inputValue}
             onChange={handleInputChange}
             onKeyPress={handleKeyPress}
             disabled={isLoading}
+            style={{ flex: 1 }}
           />
-        </div>
-        <div className="button-group">
-          <button className="icon-button" onClick={handleCaptureClick} disabled={isLoading || capturedImage}>
-            <svg viewBox="0 0 24 24">
-              <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
-            </svg>
-          </button>
-          <button className="send-button" onClick={handleSend} disabled={isLoading || (!inputValue.trim() && !capturedImage)}>
+          <button className="send-button curved" onClick={handleSend} disabled={isLoading || (!inputValue.trim() && !capturedImage)}>
             Send
           </button>
         </div>
-      </footer>
+      </div>
     </div>
   );
 }
-
-export default App;
+ 
+ export default App;

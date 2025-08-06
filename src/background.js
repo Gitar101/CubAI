@@ -1,5 +1,9 @@
 
+// Service worker boot log
+console.log("[CubAI] Background service worker started");
+
 chrome.action.onClicked.addListener((tab) => {
+  console.log("[CubAI] chrome.action.onClicked -> open side panel for window", tab?.windowId);
   chrome.sidePanel.open({ windowId: tab.windowId });
 });
 
@@ -8,14 +12,23 @@ const GEMINI_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env &&
   ? import.meta.env.VITE_GEMINI_API_KEY
   : undefined;
 
-// Create context menu item
+// Create context menu items
 chrome.runtime.onInstalled.addListener(() => {
+  console.log("[CubAI] onInstalled -> creating context menus");
+  // Existing YouTube summarize (kept)
   chrome.contextMenus.create({
     id: "summarizeWithCubAI",
     title: "Summarize using CubAI",
     contexts: ["page"],
     documentUrlPatterns: ["*://*.youtube.com/*"]
   });
+  // New generic context action to prepare CubAI messages with page context
+  chrome.contextMenus.create({
+    id: "explainWithCubAI",
+    title: "Explain Using CubAI",
+    contexts: ["all"]
+  });
+  console.log("[CubAI] Context menus created");
 });
 
 // Streaming summary to the side panel so conversation can continue
@@ -95,8 +108,96 @@ function newToken() {
   return Math.random().toString(36).slice(2);
 }
 
-// On click: open panel and trigger timedtext fetch by reloading watch pages
+// On click for context menus
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  console.log("[CubAI] contextMenus.onClicked", info?.menuItemId, "tabId=", tab?.id, "url=", tab?.url);
+  if (info.menuItemId === "explainWithCubAI") {
+    // 1) Open the side panel on the current window
+    if (tab && tab.windowId != null) {
+      console.log("[CubAI] Opening side panel for window", tab.windowId);
+      chrome.sidePanel.open({ windowId: tab.windowId });
+    }
+
+    // IMPORTANT: ensure content script is present by programmatically injecting it when needed.
+    // Some sites may not have our content script yet due to timing/navigation. MV3 service worker can't directly access DOM,
+    // so we use chrome.scripting to inject our compiled content script file (public/content_script.js is moved to extension root at build).
+    const trySend = () => {
+      if (tab && tab.id != null) {
+        console.log("[CubAI] Sending message to tab to collectPageContext", tab.id);
+        chrome.tabs.sendMessage(tab.id, { action: "collectPageContext" }, (resp) => {
+          if (chrome.runtime.lastError) {
+            console.warn("[CubAI] collectPageContext error:", chrome.runtime.lastError.message);
+            return;
+          }
+          console.log("[CubAI] collectPageContext resp:", resp);
+          try {
+            console.log("[CubAI] Requesting payload for panel via collectPageContextForPanel");
+            chrome.tabs.sendMessage(tab.id, { action: "collectPageContextForPanel" }, (resp2) => {
+              if (chrome.runtime.lastError) {
+                console.warn("[CubAI] collectPageContextForPanel error:", chrome.runtime.lastError.message, "-> trying fallback collectAndReturnContext");
+                chrome.tabs.sendMessage(tab.id, { action: "collectAndReturnContext" }, (resp3) => {
+                  console.log("[CubAI] collectAndReturnContext resp:", resp3);
+                  if (resp3 && resp3.ok && resp3.context && resp3.ask) {
+                    const line1 = `user-message: ${resp3.context}`;
+                    const line2 = `user-message: "${resp3.ask}"`;
+                    console.log("[CubAI] Prepared request (fallback):\n", line1, "\n", line2);
+                    chrome.runtime.sendMessage({ action: "appendSystemContext", text: line1 });
+                    chrome.runtime.sendMessage({ action: "appendUserMessage", text: line2 });
+                  } else {
+                    console.log("[CubAI] No payload returned from content script (fallback). Response:", resp3);
+                  }
+                });
+                return;
+              }
+              console.log("[CubAI] collectPageContextForPanel resp:", resp2);
+              if (resp2 && resp2.ok && resp2.context && resp2.ask) {
+                const line1 = `user-message: ${resp2.context}`;
+                const line2 = `user-message: "${resp2.ask}"`;
+                console.log("[CubAI] Prepared request:\n", line1, "\n", line2);
+                chrome.runtime.sendMessage({ action: "appendSystemContext", text: line1 });
+                chrome.runtime.sendMessage({ action: "appendUserMessage", text: line2 });
+              } else {
+                console.log("[CubAI] No payload returned from content script. Response:", resp2);
+              }
+            });
+          } catch (e) {
+            console.log("[CubAI] Exception while requesting panel payload:", e);
+          }
+        });
+      } else {
+        console.warn("[CubAI] No valid tab to message for context collection");
+      }
+    };
+
+    if (tab && tab.id != null) {
+      chrome.tabs.sendMessage(tab.id, { action: "__ping__" }, () => {
+        if (chrome.runtime.lastError) {
+          // No receiver yet: inject our content script explicitly, then retry
+          console.warn("[CubAI] No content script receiver, injecting script then retrying...", chrome.runtime.lastError.message);
+          chrome.scripting.executeScript(
+            {
+              target: { tabId: tab.id, allFrames: false },
+              files: ["content_script.js"]
+            },
+            () => {
+              if (chrome.runtime.lastError) {
+                console.error("[CubAI] executeScript failed:", chrome.runtime.lastError.message);
+                return;
+              }
+              console.log("[CubAI] content_script injected, retrying send");
+              // small delay to allow script bootstrap
+              setTimeout(trySend, 50);
+            }
+          );
+        } else {
+          // Receiver exists, proceed
+          trySend();
+        }
+      });
+    }
+    return;
+  }
+
   if (info.menuItemId !== "summarizeWithCubAI") return;
 
   const now = Date.now();
@@ -122,22 +223,52 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 // Support captureImage passthrough
+// Important: activeTab only applies to the tab that initiated the user gesture (e.g., the tab where the side panel/popup was opened).
+// When the user switches to a different tab and clicks the button inside the side panel UI, that new tab does NOT inherit activeTab automatically.
+// To reliably capture after switching tabs, we must either:
+//   1) have host permissions for all sites (<all_urls>) OR
+//   2) use chrome.action (or context menu) click directly on the target tab (user gesture on that tab), OR
+//   3) request host permission dynamically (MV3: chrome.permissions.request with origins).
+// Here we implement a best-effort fix:
+// - If lastSummarizeTabId exists and that tab is still active in its window, prefer that.
+// - Otherwise, use the currently active tab.
+// - Provide clearer error messages when permission is missing after a tab switch.
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "captureImage") {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs.length === 0) {
-        sendResponse({ error: "No active tab found." });
+    const useTabId = lastSummarizeTabId;
+    const proceedWithCapture = (tab) => {
+      if (!tab) {
+        sendResponse({ error: "No eligible tab to capture." });
         return;
       }
-      const activeTab = tabs[0];
-      chrome.tabs.captureVisibleTab(activeTab.windowId, { format: "png" }, (dataUrl) => {
+      chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }, (dataUrl) => {
         if (chrome.runtime.lastError) {
-          sendResponse({ error: chrome.runtime.lastError.message });
+          // Common cause: activeTab not granted for this tab after switching, or host permissions not sufficient.
+          const msg = chrome.runtime.lastError.message || "";
+          // Provide guidance to UI
+          sendResponse({
+            error: msg.includes("'<all_urls>'") || msg.includes("'activeTab'")
+              ? "Permission missing for the current tab. Open the side panel on the target tab (click the extension icon in that tab), or grant <all_urls> host permission."
+              : msg
+          });
         } else {
           sendResponse({ dataUrl });
         }
       });
-    });
+    };
+
+    if (useTabId != null) {
+      chrome.tabs.get(useTabId, (tab) => {
+        if (chrome.runtime.lastError) {
+          // Fallback to active tab in current window
+          chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => proceedWithCapture(tabs[0]));
+        } else {
+          proceedWithCapture(tab);
+        }
+      });
+    } else {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => proceedWithCapture(tabs[0]));
+    }
     return true;
   }
 });
