@@ -1,0 +1,6 @@
+change the summarize w cubai for youtube so that
+-> when clicked, it sends the gemini model the entire transcription with accurate timings formatted.
+-> remove the ask a follow up question thingy.
+-> i can normally chat from after the summary.
+-> the transcription is still there in the conversation history/memory of the model so it responds accurately.
+-> basically continuing the conversation

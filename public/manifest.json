@@ -3,12 +3,14 @@
   "name": "AI Sidekick",
   "version": "1.0",
   "description": "A React-based Chrome extension sidebar.",
-  "permissions": ["sidePanel", "storage", "activeTab", "scripting", "<all_urls>", "tabs"],
+  "permissions": ["sidePanel", "storage", "activeTab", "scripting", "tabs", "contextMenus", "webRequest"],
+  "host_permissions": ["*://*.youtube.com/*", "*://*/*"],
   "side_panel": {
     "default_path": "index.html"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "action": {
     "default_title": "Open AI Sidekick"

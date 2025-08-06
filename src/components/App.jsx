@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import ShapeBlur from './ShapeBlur';
 import TextType from './type';
@@ -11,28 +11,34 @@ function App() {
   const [error, setError] = useState('');
   const [inputValue, setInputValue] = useState('');
   const [capturedImage, setCapturedImage] = useState(null);
+  // Keep the full transcript as hidden system context so replies stay accurate
+  const [systemContext, setSystemContext] = useState('');
+  // Summary will arrive as a normal AI message now; retain for reference if needed
+  const [summary, setSummary] = useState('');
 
+  // Core chat streaming with context preserved
   const getGeminiResponse = async (currentMessages) => {
     setIsLoading(true);
     setError('');
+    // Push an empty AI message for streaming fill
     setMessageIdCounter(prevCounter => {
       setMessages(prevMessages => [...prevMessages, { id: prevCounter, role: 'ai', content: [{ type: 'text', text: '' }] }]);
       return prevCounter + 1;
     });
+
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?key=${GEMINI_API_KEY}`;
-      
-      const headers = {
-        'Content-Type': 'application/json',
-      };
+      const headers = { 'Content-Type': 'application/json' };
 
-      const formattedMessages = currentMessages.map(msg => {
+      // Inject hidden system context (transcript) at the start so it persists in-thread
+      const augmented = systemContext
+        ? [{ role: 'user', content: [{ type: 'text', text: systemContext }] }, ...currentMessages]
+        : currentMessages;
+
+      const formattedMessages = augmented.map(msg => {
         const parts = msg.content.map(part => {
-          if (part.type === 'text') {
-            return { text: part.text };
-          } else if (part.type === 'image') {
-            return { inlineData: { mimeType: 'image/png', data: part.url.split(',')[1] } };
-          }
+          if (part.type === 'text') return { text: part.text };
+          if (part.type === 'image') return { inlineData: { mimeType: 'image/png', data: part.url.split(',')[1] } };
           return {};
         });
         return { role: msg.role === 'ai' ? 'model' : 'user', parts };
@@ -40,23 +46,11 @@ function App() {
 
       const body = {
         contents: formattedMessages,
-        generationConfig: {
-          temperature: 0.2,
-          topP: 0.95,
-          topK: 64,
-          maxOutputTokens: 8192,
-        },
+        generationConfig: { temperature: 0.2, topP: 0.95, topK: 64, maxOutputTokens: 8192 },
       };
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -67,80 +61,104 @@ function App() {
         if (done) break;
 
         const chunk = decoder.decode(value, { stream: true });
-console.log("Received streamed content:", chunk);
-buffer += chunk;
+        buffer += chunk;
         let jsonStream = buffer;
 
         while (true) {
-            const start = jsonStream.indexOf('{');
-            if (start === -1) {
-                break;
+          const start = jsonStream.indexOf('{');
+          if (start === -1) break;
+
+          let braceCount = 0, end = -1, inString = false;
+          for (let i = start; i < jsonStream.length; i++) {
+            if (jsonStream[i] === '"' && (i === 0 || jsonStream[i - 1] !== '\\')) inString = !inString;
+            if (inString) continue;
+            if (jsonStream[i] === '{') braceCount++;
+            else if (jsonStream[i] === '}') braceCount--;
+            if (braceCount === 0) { end = i; break; }
+          }
+
+          if (end === -1) break;
+
+          const objectStr = jsonStream.substring(start, end + 1);
+          try {
+            const json = JSON.parse(objectStr);
+            if (json.candidates && json.candidates[0]?.content?.parts) {
+              const aiMessagePart = json.candidates[0].content.parts[0];
+              if (aiMessagePart?.text) {
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  const lastIdx = newMessages.length - 1;
+                  if (lastIdx >= 0 && newMessages[lastIdx].role === 'ai') {
+                    const updated = {
+                      ...newMessages[lastIdx],
+                      content: [{ ...newMessages[lastIdx].content[0], text: (newMessages[lastIdx].content[0]?.text || '') + aiMessagePart.text }]
+                    };
+                    newMessages[lastIdx] = updated;
+                    return newMessages;
+                  }
+                  return prev;
+                });
+              }
             }
-
-            let braceCount = 0;
-            let end = -1;
-            let inString = false;
-
-            for (let i = start; i < jsonStream.length; i++) {
-                if (jsonStream[i] === '"' && (i === 0 || jsonStream[i-1] !== '\\')) {
-                    inString = !inString;
-                }
-                if (inString) continue;
-
-                if (jsonStream[i] === '{') {
-                    braceCount++;
-                } else if (jsonStream[i] === '}') {
-                    braceCount--;
-                }
-                if (braceCount === 0) {
-                    end = i;
-                    break;
-                }
-            }
-
-            if (end === -1) {
-                break;
-            }
-
-            const objectStr = jsonStream.substring(start, end + 1);
-            try {
-                const json = JSON.parse(objectStr);
-                if (json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts) {
-                    const aiMessagePart = json.candidates[0].content.parts[0];
-                    if (aiMessagePart && aiMessagePart.text) {
-                        setMessages(prevMessages => {
-                            const newMessages = [...prevMessages];
-                            const lastMessageIndex = newMessages.length - 1;
-                            if (lastMessageIndex >= 0 && newMessages[lastMessageIndex].role === 'ai') {
-                                const updatedLastMessage = {
-                                    ...newMessages[lastMessageIndex],
-                                    content: [{
-                                        ...newMessages[lastMessageIndex].content[0],
-                                        text: (newMessages[lastMessageIndex].content[0]?.text || '') + aiMessagePart.text
-                                    }]
-                                };
-                                newMessages[lastMessageIndex] = updatedLastMessage;
-                                return newMessages;
-                            }
-                            return prevMessages;
-                        });
-                    }
-                }
-                jsonStream = jsonStream.substring(end + 1);
-            } catch (e) {
-                console.error("Failed to parse JSON object from stream:", e);
-                jsonStream = jsonStream.substring(start + 1);
-            }
+            jsonStream = jsonStream.substring(end + 1);
+          } catch {
+            jsonStream = jsonStream.substring(start + 1);
+          }
         }
         buffer = jsonStream;
       }
-
     } catch (err) {
       setError(err.message);
     } finally {
       setIsLoading(false);
     }
   };
+
+
+  useEffect(() => {
+    if (chrome.runtime && chrome.runtime.onMessage) {
+      const listener = (message, sender, sendResponse) => {
+        if (message.action === "appendAIMessage") {
+          // Treat summary as a normal AI message in chat (single insertion)
+          const text = (message.text || '').trim();
+          if (!text) return;
+
+          setMessageIdCounter(prevCounter => {
+            // Prevent immediately consecutive duplicate insertions
+            let shouldInsert = true;
+            setMessages(prev => {
+              if (prev.length > 0) {
+                const last = prev[prev.length - 1];
+                const lastText = last?.content?.[0]?.text?.trim?.() || "";
+                if (last.role === 'ai' && lastText === text) {
+                  shouldInsert = false;
+                  return prev;
+                }
+              }
+              const next = shouldInsert
+                ? [...prev, { id: prevCounter, role: 'ai', content: [{ type: 'text', text }] }]
+                : prev;
+              return next;
+            });
+            return shouldInsert ? prevCounter + 1 : prevCounter;
+          });
+          // Keep reference copy to show in the summary section if present
+          setSummary(prev => (prev?.trim() === text ? prev : text));
+          setError('');
+        } else if (message.action === "appendSystemContext") {
+          // Store transcript in hidden system context for future turns
+          const text = message.text || '';
+          setSystemContext(text);
+        } else if (message.action === "displayError") {
+          setError(message.error);
+        }
+      };
+      chrome.runtime.onMessage.addListener(listener);
+      return () => chrome.runtime.onMessage.removeListener(listener);
+    }
+  }, []);
+
+  // Removed "ask a follow up question" flow. Normal chat now covers this.
 
   const handleCaptureClick = () => {
     chrome.runtime.sendMessage({ action: "captureImage" }, (response) => {
@@ -202,6 +220,19 @@ buffer += chunk;
       </header>
       <main className="main-content">
         <div className="chat-area">
+          {/* Only one rendering path for the summary: either as a pinned block OR as part of chat.
+              To avoid duplicated visual content, we will NOT pin if the latest AI message already equals summary. */}
+          {(() => {
+            const last = messages[messages.length - 1];
+            const lastText = last?.role === 'ai' ? (last.content?.[0]?.text || '') : '';
+            const shouldPin = summary && summary.trim() && summary.trim() !== lastText.trim();
+            return shouldPin ? (
+              <div className="summary-section">
+                <h3>Summary:</h3>
+                <ReactMarkdown>{summary}</ReactMarkdown>
+              </div>
+            ) : null;
+          })()}
           {messages.map((msg) => (
             <div key={msg.id} className={`message ${msg.role}-message`}>
               {msg.content.map((part, i) => {

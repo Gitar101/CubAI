@@ -187,6 +187,7 @@ const ShapeBlur = ({
 
     const resize = () => {
       const container = mountRef.current;
+      if (!container) return;
       w = container.clientWidth;
       h = container.clientHeight;
       const dpr = Math.min(window.devicePixelRatio, 2);
