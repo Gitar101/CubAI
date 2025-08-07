@@ -141,8 +141,14 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
                     const line1 = `user-message: ${resp3.context}`;
                     const line2 = `user-message: "${resp3.ask}"`;
                     console.log("[CubAI] Prepared request (fallback):\n", line1, "\n", line2);
+                    // Force UI to Explain mode when invoked from context menu
+                    chrome.runtime.sendMessage({ action: "setMode", mode: "explain" });
                     chrome.runtime.sendMessage({ action: "appendSystemContext", text: line1 });
                     chrome.runtime.sendMessage({ action: "appendUserMessage", text: line2 });
+                    // Add hidden context URL token for pill rendering in bubble
+                    if (tab && tab.url) {
+                      chrome.runtime.sendMessage({ action: "appendUserMessage", text: `//context-url: ${tab.url}` });
+                    }
                   } else {
                     console.log("[CubAI] No payload returned from content script (fallback). Response:", resp3);
                   }
@@ -154,8 +160,18 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
                 const line1 = `user-message: ${resp2.context}`;
                 const line2 = `user-message: "${resp2.ask}"`;
                 console.log("[CubAI] Prepared request:\n", line1, "\n", line2);
+                // Tell panel to switch into Explain-with-context mode
+                chrome.runtime.sendMessage({ action: "setMode", mode: "explain" });
+                // Provide the system context immediately
                 chrome.runtime.sendMessage({ action: "appendSystemContext", text: line1 });
+                // Show context preview pill before any user send
+                const tabMeta = { title: tab?.title || "", url: tab?.url || "", favIconUrl: tab?.favIconUrl || "", id: tab?.id };
+                chrome.runtime.sendMessage({ action: "setContextPreview", preview: tabMeta });
+                // Seed only the initial ask line; also add a hidden context URL token line for pill rendering in bubble
                 chrome.runtime.sendMessage({ action: "appendUserMessage", text: line2 });
+                if (tabMeta.url) {
+                  chrome.runtime.sendMessage({ action: "appendUserMessage", text: `//context-url: ${tabMeta.url}` });
+                }
               } else {
                 console.log("[CubAI] No payload returned from content script. Response:", resp2);
               }
@@ -222,7 +238,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
 });
 
-// Unified background message handler for UI integrations (captureImage + listTabs + getTabContent)
+// Unified background message handler for UI integrations (captureImage + listTabs + getTabContent + getActiveTabCubAIContext)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const action = message && message.action;
 
@@ -259,6 +275,154 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     } else {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => proceedWithCapture(tabs[0]));
     }
+    return true;
+  }
+
+  // 1b) Capture FULL PAGE stitched screenshot with compression
+  if (action === "captureFullPage") {
+    const quality = typeof message.quality === "number" ? Math.min(0.95, Math.max(0.3, message.quality)) : 0.6;
+    const maxWidth = typeof message.maxWidth === "number" ? Math.min(2000, Math.max(512, message.maxWidth)) : 1024;
+
+    // Note: The following function executes IN PAGE CONTEXT. Do not reference variables from SW scope.
+    const captureSlices = async (maxWidth, quality) => {
+      try {
+        // Defensive window/document resolution
+        const doc = document;
+        const root = doc && (doc.documentElement || doc.body || null);
+        if (!root) {
+          return { ok: false, error: "No document root available" };
+        }
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        // Compute total height safely
+        const docEl = doc.documentElement || {};
+        const body = doc.body || {};
+        const totalHeight = Math.max(
+          Number(docEl.scrollHeight) || 0,
+          Number(body.scrollHeight) || 0,
+          Number(docEl.offsetHeight) || 0,
+          Number(body.offsetHeight) || 0,
+          Number(docEl.clientHeight) || 0
+        );
+        const viewportH = Math.max(1, window.innerHeight || 0);
+        const steps = Math.max(1, Math.ceil(totalHeight / viewportH));
+
+        // Freeze overflow to keep layout stable
+        const original = {
+          scrollX: window.scrollX || 0,
+          scrollY: window.scrollY || 0,
+          overflowY: docEl.style ? docEl.style.overflowY : '',
+          bodyOverflowY: body && body.style ? body.style.overflowY : ''
+        };
+        if (docEl && docEl.style) docEl.style.overflowY = 'hidden';
+        if (body && body.style) body.style.overflowY = 'hidden';
+
+        const slices = [];
+
+        for (let i = 0; i < steps; i++) {
+          const y = i * viewportH;
+          try {
+            window.scrollTo({ top: y, left: 0, behavior: 'instant' });
+          } catch {}
+          await sleep(150);
+
+          // Ask background to capture current viewport
+          const dataUrl = await new Promise((resolve) => {
+            try {
+              chrome.runtime.sendMessage({ action: "captureImage" }, (resp) => {
+                if (!resp || chrome.runtime.lastError) {
+                  resolve("");
+                  return;
+                }
+                resolve(resp.dataUrl || "");
+              });
+            } catch {
+              resolve("");
+            }
+          });
+          if (!dataUrl) continue;
+
+          // Downscale and recompress to fit budget
+          const img = new Image();
+          await new Promise((res) => { img.onload = res; img.onerror = () => res(); img.src = dataUrl; });
+
+          const w = Math.max(1, img.width || 1);
+          const scale = Math.min(1, maxWidth / w);
+          const outW = Math.floor(w * scale);
+          const outH = Math.floor((img.height || 1) * scale);
+          const canvas = document.createElement('canvas');
+          canvas.width = outW; canvas.height = outH;
+          const ctx = canvas.getContext('2d');
+          if (ctx && typeof ctx.imageSmoothingQuality !== 'undefined') ctx.imageSmoothingQuality = 'high';
+          try { ctx.drawImage(img, 0, 0, outW, outH); } catch (e) {
+            return { ok: false, error: "Canvas draw failed: " + (e && e.message ? e.message : String(e)) };
+          }
+          const jpeg = canvas.toDataURL('image/jpeg', quality);
+
+          slices.push({ url: jpeg, w: outW, h: outH, index: i });
+        }
+
+        // Restore overflow/scroll
+        try { window.scrollTo(original.scrollX || 0, original.scrollY || 0); } catch {}
+        if (docEl && docEl.style) docEl.style.overflowY = original.overflowY || '';
+        if (body && body.style) body.style.overflowY = original.bodyOverflowY || '';
+
+        return { ok: true, slices };
+      } catch (e) {
+        return { ok: false, error: (e && e.message) ? e.message : String(e) };
+      }
+    };
+
+    // Instrument the SW side for easier diagnostics
+    try { console.log("[CaptureFullPage][SW] Start", { quality, maxWidth }); } catch {}
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError) {
+        try { console.warn("[CaptureFullPage][SW] tabs.query error:", chrome.runtime.lastError.message); } catch {}
+        sendResponse({ error: chrome.runtime.lastError.message });
+        return;
+      }
+      const tab = (tabs && tabs[0]) || null;
+      if (!tab || tab.id == null) {
+        try { console.warn("[CaptureFullPage][SW] No active tab"); } catch {}
+        sendResponse({ error: "No active tab" });
+        return;
+      }
+
+      const run = () => {
+        try { console.log("[CaptureFullPage][SW] Executing captureSlices in tab", tab.id); } catch {}
+        chrome.scripting.executeScript({ target: { tabId: tab.id }, func: captureSlices, args: [maxWidth, quality] }, (results) => {
+          if (chrome.runtime.lastError) {
+            try { console.warn("[CaptureFullPage][SW] executeScript error:", chrome.runtime.lastError.message); } catch {}
+            sendResponse({ error: chrome.runtime.lastError.message });
+            return;
+          }
+          const res = results && results[0] && results[0].result;
+          try { console.log("[CaptureFullPage][SW] Received result", { hasRes: !!res, ok: res?.ok, slices: res?.slices?.length }); } catch {}
+          if (!res || !res.ok || !Array.isArray(res.slices) || res.slices.length === 0) {
+            sendResponse({ error: res?.error || "Failed to capture slices" });
+            return;
+          }
+          sendResponse({ ok: true, slices: res.slices });
+        });
+      };
+
+      // Ensure content_script present to handle captureImage messages from page context
+      chrome.tabs.sendMessage(tab.id, { action: "__ping__" }, () => {
+        if (chrome.runtime.lastError) {
+          try { console.log("[CaptureFullPage][SW] Injecting content_script.js before run"); } catch {}
+          chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: false }, files: ["content_script.js"] }, () => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ error: chrome.runtime.lastError.message });
+              return;
+            }
+            setTimeout(run, 80);
+          });
+        } else {
+          run();
+        }
+      });
+    });
     return true;
   }
 
@@ -329,6 +493,61 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         else sendResponse({ error: (res && res.error) || "Unknown extraction error" });
       });
     }
+    return true;
+  }
+
+  // 4) For App side-panel: get active tab page-context via content_script
+  if (action === "getActiveTabCubAIContext") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (chrome.runtime.lastError) {
+        sendResponse({ error: chrome.runtime.lastError.message });
+        return;
+      }
+      const tab = (tabs && tabs[0]) || null;
+      if (!tab || tab.id == null) {
+        sendResponse({ error: "No active tab" });
+        return;
+      }
+
+      const finalize = () => {
+        chrome.tabs.sendMessage(tab.id, { action: "collectAndReturnContext" }, (resp) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ error: chrome.runtime.lastError.message });
+            return;
+          }
+          if (!resp || !resp.ok) {
+            sendResponse({ error: resp?.error || "Failed to collect page context" });
+            return;
+          }
+          const tabMeta = {
+            id: tab.id,
+            title: tab.title || "",
+            url: tab.url || "",
+            favIconUrl: tab.favIconUrl || ""
+          };
+          sendResponse({ ok: true, context: resp.context, ask: resp.ask, tabMeta });
+        });
+      };
+
+      // Ensure content_script is present
+      chrome.tabs.sendMessage(tab.id, { action: "__ping__" }, () => {
+        if (chrome.runtime.lastError) {
+          // Inject then retry
+          chrome.scripting.executeScript(
+            { target: { tabId: tab.id, allFrames: false }, files: ["content_script.js"] },
+            () => {
+              if (chrome.runtime.lastError) {
+                sendResponse({ error: chrome.runtime.lastError.message });
+                return;
+              }
+              setTimeout(finalize, 50);
+            }
+          );
+        } else {
+          finalize();
+        }
+      });
+    });
     return true;
   }
 });

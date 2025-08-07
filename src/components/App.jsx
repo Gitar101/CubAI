@@ -10,7 +10,10 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [inputValue, setInputValue] = useState('');
+  // Single full image (legacy) or multiple slices (new)
   const [capturedImage, setCapturedImage] = useState(null);
+  const [captureMeta, setCaptureMeta] = useState(null); // {w,h,kb}
+  const [capturedSlices, setCapturedSlices] = useState([]); // [{url,w,h,index}]
   // Keep the full transcript as hidden system context so replies stay accurate
   const [systemContext, setSystemContext] = useState('');
   // Hidden system instruction to prepend to the request (do NOT show in UI)
@@ -19,8 +22,8 @@ function App() {
   const [summary, setSummary] = useState('');
 
   // UI state: system prompt mode and drop-ups
-  // mode: "summarize" or "question"
-  const [mode, setMode] = useState('question');
+  // modes: "chat" | "explain" | "summarize"
+  const [mode, setMode] = useState('chat');
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [showTabsMenu, setShowTabsMenu] = useState(false);
   const [availableTabs, setAvailableTabs] = useState([]);
@@ -36,8 +39,8 @@ function App() {
     } catch {}
   }, [selectedModel]);
 
-  // Core chat streaming with context preserved
-  const getGeminiResponse = async (currentMessages) => {
+  // Core chat streaming with optional page-context injection
+  const getGeminiResponse = async (currentMessages, includeContext) => {
     setIsLoading(true);
     setError('');
     // Push an empty AI message for streaming fill
@@ -52,16 +55,18 @@ function App() {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${GEMINI_API_KEY}`;
       const headers = { 'Content-Type': 'application/json' };
 
-      // Inject hidden system instruction and context (transcript) at the start so they persist in-thread
-      const augmented = [
-        ...(systemInstruction
-          ? [{ role: 'user', content: [{ type: 'text', text: `[INSTRUCTION]\n${systemInstruction}` }] }]
-          : []),
-        ...(systemContext
-          ? [{ role: 'user', content: [{ type: 'text', text: systemContext }] }]
-          : []),
-        ...currentMessages
-      ];
+      // Conditionally inject hidden system instruction and context so they persist in-thread
+      const augmented = includeContext
+        ? [
+            ...(systemInstruction
+              ? [{ role: 'user', content: [{ type: 'text', text: `[INSTRUCTION]\n${systemInstruction}` }] }]
+              : []),
+            ...(systemContext
+              ? [{ role: 'user', content: [{ type: 'text', text: systemContext }] }]
+              : []),
+            ...currentMessages
+          ]
+        : [...currentMessages];
 
       const formattedMessages = augmented.map(msg => {
         const parts = msg.content.map(part => {
@@ -146,7 +151,20 @@ function App() {
   useEffect(() => {
     if (chrome.runtime && chrome.runtime.onMessage) {
       const listener = (message, sender, sendResponse) => {
-        if (message.action === "appendAIMessage") {
+        if (message.action === "setMode") {
+          const m = message.mode;
+          if (m === 'explain' || m === 'summarize' || m === 'chat') {
+            setMode(m);
+            if (m === 'summarize') {
+              setSystemInstruction('Summarize the provided page context succinctly with key points and structure.');
+            } else if (m === 'explain') {
+              setSystemInstruction('Explain clearly using ONLY the attached page context. If something is not in the context, say you cannot find it.');
+            } else if (m === 'chat') {
+              setSystemInstruction('You are a helpful assistant. Answer conversationally. Do not reference page context.');
+            }
+          }
+          return;
+        } else if (message.action === "appendAIMessage") {
           // Treat summary as a normal AI message in chat (single insertion)
           const text = (message.text || '').trim();
           if (!text) return;
@@ -177,6 +195,16 @@ function App() {
           // Store transcript in hidden system context for future turns
           const text = message.text || '';
           setSystemContext(text);
+        } else if (message.action === "setContextPreview") {
+          const p = message.preview || {};
+          const url = p.url || '';
+          setContextPreview({
+            title: p.title || 'Untitled',
+            url,
+            origin: (() => { try { return new URL(url).origin; } catch { return url; } })(),
+            favIconUrl: p.favIconUrl || '',
+            tabId: p.id
+          });
         } else if (message.action === "displayError") {
           setError(message.error);
         }
@@ -200,6 +228,11 @@ function App() {
     // Update the hidden instruction used for requests
     if (m === 'summarize') {
       setSystemInstruction('Summarize the provided page context succinctly with key points and structure.');
+    } else if (m === 'explain') {
+      setSystemInstruction('Explain clearly using ONLY the attached page context. If something is not in the context, say you cannot find it.');
+    } else if (m === 'chat') {
+      // Chat mode: do not rely on page context at all
+      setSystemInstruction('You are a helpful assistant. Answer conversationally. Do not reference page context.');
     } else {
       setSystemInstruction('Answer strictly and only the user question using the page context. If unknown in context, say you cannot find it.');
     }
@@ -241,6 +274,8 @@ function App() {
 
   // UI preview card of last added page context
   const [contextPreview, setContextPreview] = useState(null);
+  // Track whether the last user turn included page context, to render a placeholder badge in-thread
+  const [lastTurnUsedContext, setLastTurnUsedContext] = useState(false);
 
   const addTabContext = (tabId) => {
     try {
@@ -297,25 +332,144 @@ function App() {
 
   // Restore send flow with curved input, honoring current mode
   const handleSend = () => {
-    if (!inputValue.trim() && !capturedImage) return;
-    const content = [];
+    if (!inputValue.trim() && !capturedImage && (!capturedSlices || capturedSlices.length === 0)) return;
 
-    // System prompt behavior based on mode, both use entire page context (systemContext already holds it)
-    // Do NOT inline system instruction into the user message.
-    // It is injected separately at the start of the request in getGeminiResponse().
+    const buildAndSend = (includeCtx) => {
+      const content = [];
+      if (capturedImage) {
+        content.push({ type: 'image', url: capturedImage });
+        if (captureMeta?.w && captureMeta?.h) {
+          content.push({ type: 'text', text: `//image-size: ${captureMeta.w}x${captureMeta.h}` });
+        }
+      }
+      if (capturedSlices && capturedSlices.length > 0) {
+        // Attach each slice as an image part
+        capturedSlices
+          .slice() // copy
+          .sort((a,b) => a.index - b.index)
+          .forEach(s => content.push({ type: 'image', url: s.url }));
+        const totalKB = Math.round(capturedSlices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
+        content.push({ type: 'text', text: `//image-slices: ${capturedSlices.length} • ~${totalKB} KB` });
+      }
+      if (inputValue.trim()) content.push({ type: 'text', text: inputValue });
 
-    if (capturedImage) content.push({ type: 'image', url: capturedImage });
-    if (inputValue.trim()) content.push({ type: 'text', text: inputValue });
-    const newUserMessage = { id: messageIdCounter, role: 'user', content };
-    const updatedMessages = [...messages, newUserMessage];
-    setMessages(updatedMessages);
-    setMessageIdCounter(prev => prev + 1);
-    getGeminiResponse(updatedMessages);
-    setInputValue('');
-    setCapturedImage(null);
+      // Do NOT inject any “Attached page context: …” text. The composer pill indicates attached context,
+      // and the model receives systemContext separately.
+
+      // If we have context and a preview URL, append a hidden context-url token as a separate part
+      if (includeCtx && contextPreview?.url) {
+        content.push({ type: 'text', text: `//context-url: ${contextPreview.url}` });
+      }
+
+      const newUserMessage = { id: messageIdCounter, role: 'user', content };
+      const updatedMessages = [...messages, newUserMessage];
+      setMessages(updatedMessages);
+      setMessageIdCounter(prev => prev + 1);
+      getGeminiResponse(updatedMessages, includeCtx);
+      setInputValue('');
+      setCapturedImage(null);
+      setCapturedSlices([]);
+      setLastTurnUsedContext(!!includeCtx);
+    };
+
+    if (mode === 'chat') {
+      // Pure chat: no page context collection or injection
+      buildAndSend(false);
+      return;
+    }
+
+    // Non-chat modes must include page content. Ensure we have it; if not, fetch from background.
+    const haveContext = !!(systemContext && systemContext.trim().length > 0);
+    if (haveContext && contextPreview?.url) {
+      buildAndSend(true);
+      return;
+    }
+
+    try {
+      chrome.runtime.sendMessage({ action: "getActiveTabCubAIContext" }, (resp) => {
+        if (chrome.runtime.lastError) {
+          setError(chrome.runtime.lastError.message);
+          return;
+        }
+        if (!resp || !resp.ok) {
+          setError(resp?.error || "Failed to obtain page context");
+          return;
+        }
+        const { context, tabMeta } = resp;
+        setSystemContext(context || '');
+
+        const meta = tabMeta || {};
+        const url = meta.url || '';
+        const title = meta.title || 'Untitled';
+        setContextPreview({
+          title,
+          url,
+          origin: (() => {
+            try { return new URL(url).origin; } catch { return url; }
+          })(),
+          favIconUrl: meta.favIconUrl || '',
+          tabId: meta.id
+        });
+
+        // After storing, send the message including context
+        buildAndSend(true);
+      });
+    } catch (e) {
+      setError(String(e?.message || e));
+    }
   };
   const handleInputChange = (e) => setInputValue(e.target.value);
   const handleKeyPress = (e) => { if (e.key === 'Enter') handleSend(); };
+
+  // Request page capture. Background now returns multiple slices (no stitching).
+  const handleCaptureFullPage = async () => {
+    const dbg = (msg, extra) => { try { console.log('[CaptureFullPage]', msg, extra ?? ''); } catch {} };
+    try {
+      setError('');
+      setCapturedImage(null);
+      setCapturedSlices([]);
+      dbg('Sending chrome.runtime.sendMessage', { action: 'captureFullPage', quality: 0.6, maxWidth: 1024 });
+      chrome.runtime.sendMessage({ action: 'captureFullPage', quality: 0.6, maxWidth: 1024 }, (resp) => {
+        // Guard undefined callback param
+        if (typeof resp === 'undefined') {
+          const lastErr = chrome?.runtime?.lastError?.message;
+          dbg('Response is undefined', { lastError: lastErr });
+          setError(lastErr || 'No response from background for captureFullPage');
+          return;
+        }
+        dbg('Received response', { keys: Object.keys(resp || {}), ok: resp?.ok, slices: Array.isArray(resp?.slices) ? resp.slices.length : 0 });
+        if (chrome.runtime.lastError) {
+          dbg('chrome.runtime.lastError', chrome.runtime.lastError.message);
+          setError(chrome.runtime.lastError.message);
+          return;
+        }
+        if (!resp || !resp.ok) {
+          dbg('Not ok response', resp);
+          setError(resp?.error || 'Failed to capture page');
+          return;
+        }
+        if (Array.isArray(resp.slices) && resp.slices.length > 0) {
+          dbg('Applying slices', { count: resp.slices.length, first: resp.slices[0] ? { w: resp.slices[0].w, h: resp.slices[0].h, len: resp.slices[0].url?.length } : null });
+          setCapturedSlices(resp.slices);
+          const totalKB = Math.round(resp.slices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
+          // Use the first slice meta just to show hint numbers
+          setCaptureMeta({ w: resp.slices[0].w, h: resp.slices[0].h, kb: totalKB });
+        } else if (resp.dataUrl) {
+          dbg('Applying single image', { len: resp.dataUrl.length, w: resp.width, h: resp.height });
+          // Backward compatibility if a single stitched image is returned
+          setCapturedImage(resp.dataUrl);
+          const approxKB = Math.round((resp.dataUrl.length * 3 / 4) / 1024);
+          setCaptureMeta({ w: resp.width, h: resp.height, kb: approxKB });
+        } else {
+          dbg('No data in response', resp);
+          setError('Capture returned no data');
+        }
+      });
+    } catch (e) {
+      dbg('Exception thrown', e);
+      setError(String(e?.message || e));
+    }
+  };
  
   return (
     <div className="app-container" style={{ position: 'relative', minHeight: '100vh', backgroundColor: '#BCA88D' }}>
@@ -336,16 +490,15 @@ function App() {
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Sparkle/star icon */}
-          {/* Four-corner rounded star (white outline) */}
-          <span aria-hidden="true" style={{ display: 'inline-grid', placeItems: 'center' }}>
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#ffffff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 3.5c1.2 2.9 1.2 6.1 0 9-1.2-2.9-1.2-6.1 0-9z" />
-              <path d="M20.5 12c-2.9 1.2-6.1 1.2-9 0 2.9-1.2 6.1-1.2 9 0z" />
-              <path d="M12 20.5c-1.2-2.9-1.2-6.1 0-9 1.2 2.9 1.2 6.1 0 9z" />
-              <path d="M3.5 12c2.9-1.2 6.1-1.2 9 0-2.9 1.2-6.1 1.2-9 0z" />
-            </svg>
-          </span>
+          {/* Brand icon from public/cubai.png next to text */}
+          <img
+            src="/cubai2.png"
+            alt=""
+            aria-hidden="true"
+            width="28"
+            height="28"
+            style={{ display: 'block', filter: 'brightness(1) contrast(1)', borderRadius: 6 }}
+          />
 
           {/* Brand text with shine */}
           <ShinyText text="CubAI" speed={5} />
@@ -380,8 +533,223 @@ function App() {
             >
               {msg.content.map((part, i) => {
                 const key = `${msg.id}-${i}`;
+
+                // URL preview injection: if a text part contains a URL, render a compact preview card under the text.
                 if (part.type === 'text') {
-                  return <ReactMarkdown key={key}>{part.text}</ReactMarkdown>;
+                  const raw = part.text || '';
+
+                  // Special hidden token produced by background or buildAndSend to show a pill in-bubble without showing raw text
+                  const hiddenTokenMatch = raw.match(/^\/\/context-url:\s*(https?:\/\/[^\s)]+)\s*$/i);
+                  if (hiddenTokenMatch) {
+                    const url = hiddenTokenMatch[1];
+                    let hostname = '';
+                    let origin = '';
+                    try {
+                      const u = new URL(url);
+                      hostname = u.hostname;
+                      origin = u.origin;
+                    } catch {
+                      hostname = url.replace(/^https?:\/\//i, '');
+                      origin = null;
+                    }
+                    const favicon = origin ? `${origin}/favicon.ico` : '';
+                    const title = hostname ? hostname : (url.length > 60 ? url.slice(0, 57) + '…' : url);
+
+                    return (
+                      <a
+                        key={key + '-card'}
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          marginTop: 8,
+                          padding: 10,
+                          borderRadius: 12,
+                          background: '#111317',
+                          color: '#e8e8e8',
+                          textDecoration: 'none',
+                          border: '1px solid #22252b',
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: '50%',
+                            overflow: 'hidden',
+                            background: '#23262d',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flex: '0 0 auto',
+                          }}
+                        >
+                          {favicon ? (
+                            <img
+                              src={favicon}
+                              alt=""
+                              width="20"
+                              height="20"
+                              style={{ display: 'block' }}
+                              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                            />
+                          ) : (
+                            <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#444' }} />
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                          <div
+                            style={{
+                              fontWeight: 700,
+                              color: '#f1f5f9',
+                              lineHeight: 1.2,
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              maxWidth: '100%',
+                            }}
+                            title={title}
+                          >
+                            {title}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              color: '#a1a1aa',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              marginTop: 2,
+                              maxWidth: '100%',
+                            }}
+                            title={hostname || url}
+                          >
+                            {hostname || url}
+                          </div>
+                        </div>
+                      </a>
+                    );
+                  }
+
+                  // Fallback: normal text path with implicit URL detection
+                  const text = raw;
+                  const urlMatch = text.match(/https?:\/\/[^\s)]+/i);
+                  const url = urlMatch ? urlMatch[0] : null;
+
+                  // Render text first
+                  const textNode = <ReactMarkdown key={key + '-md'}>{text}</ReactMarkdown>;
+
+                  if (!url) {
+                    return textNode;
+                  }
+
+                  // Build preview meta using only safe, CORS-free data available (hostname, path, favicon).
+                  let hostname = '';
+                  let origin = '';
+                  try {
+                    const u = new URL(url);
+                    hostname = u.hostname;
+                    origin = u.origin;
+                  } catch {
+                    hostname = url.replace(/^https?:\/\//i, '');
+                    origin = null;
+                  }
+
+                  // Try to use site's favicon; fallback to empty (browser will handle 404 silently).
+                  const favicon = origin ? `${origin}/favicon.ico` : '';
+
+                  // Optional title extraction hint: if message systemContext already contained the page title line,
+                  // we could parse it here. For now, show the URL as title if no better title exists.
+                  // Keep the card minimal to avoid network fetches in UI.
+                  const title = hostname ? hostname : (url.length > 60 ? url.slice(0, 57) + '…' : url);
+
+                  const card =
+                    <a
+                      key={key + '-card'}
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        marginTop: 8,
+                        padding: 10,
+                        borderRadius: 12,
+                        background: '#111317',
+                        color: '#e8e8e8',
+                        textDecoration: 'none',
+                        border: '1px solid #22252b',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          overflow: 'hidden',
+                          background: '#23262d',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flex: '0 0 auto',
+                        }}
+                      >
+                        {/* favicon preview */}
+                        {favicon ? (
+                          <img
+                            src={favicon}
+                            alt=""
+                            width="20"
+                            height="20"
+                            style={{ display: 'block' }}
+                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                          />
+                        ) : (
+                          <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#444' }} />
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontWeight: 700,
+                            color: '#f1f5f9',
+                            lineHeight: 1.2,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            maxWidth: '100%',
+                          }}
+                          title={title}
+                        >
+                          {title}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: '#a1a1aa',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            marginTop: 2,
+                            maxWidth: '100%',
+                          }}
+                          title={hostname || url}
+                        >
+                          {hostname || url}
+                        </div>
+                      </div>
+                    </a>;
+
+                  return (
+                    <div key={key} style={{ display: 'flex', flexDirection: 'column' }}>
+                      {textNode}
+                      {card}
+                    </div>
+                  );
                 } else if (part.type === 'image') {
                   return <img key={key} src={part.url} alt="Captured content" style={{ maxWidth: '100%' }} />;
                 }
@@ -471,6 +839,48 @@ function App() {
               </button>
             </div>
           )}
+          {/* Screenshot preview chip */}
+          {capturedImage && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                marginBottom: 10,
+                padding: '8px 10px',
+                borderRadius: 10,
+                background: 'rgba(0,0,0,0.10)',
+                border: '1px solid #7D8D86'
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ width: 58, height: 38, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.2)', background: '#111317' }}>
+                <img
+                  src={capturedImage}
+                  alt="Page capture preview"
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <div style={{ fontWeight: 600, color: '#1b1b1b' }}>
+                  Page screenshot
+                </div>
+                <div style={{ fontSize: 12, color: '#3E3F29' }}>
+                  {captureMeta?.w}×{captureMeta?.h}{captureMeta?.kb ? ` • ~${captureMeta.kb} KB` : ''}
+                </div>
+              </div>
+              <button
+                onClick={(e) => { e.stopPropagation(); setCapturedImage(null); setCaptureMeta(null); }}
+                aria-label="Remove screenshot"
+                title="Remove screenshot"
+                style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#3E3F29', cursor: 'pointer' }}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#3E3F29" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+              </button>
+            </div>
+          )}
           <div
             className="input-surface"
             style={{
@@ -489,7 +899,7 @@ function App() {
             <input
               type="text"
               className="chatlike-input"
-              placeholder="How can I help you today?"
+              placeholder={mode === 'chat' ? 'Chat without page context…' : 'Ask with page context…'}
               value={inputValue}
               onChange={handleInputChange}
               onKeyPress={handleKeyPress}
@@ -519,7 +929,7 @@ function App() {
                     onClick={toggleModeMenu}
                     disabled={isLoading}
                     aria-label="Switch system prompt"
-                    title={`Mode: ${mode === 'summarize' ? 'Summarize' : 'Question'}`}
+                    title={`Mode: ${mode === 'chat' ? 'Chat' : mode === 'summarize' ? 'Summarize' : 'Explain'}`}
                     style={{
                       width: 30, height: 30, display: 'grid', placeItems: 'center',
                       borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent'
@@ -557,25 +967,37 @@ function App() {
                         }}
                       >
                         <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='summarize' ? '#43cea2' : '#6b7280' }} />
-                        Summarize
+                        Summarize (with context)
                       </button>
                       <button
                         className="menu-item"
-                        onClick={() => selectMode('question')}
+                        onClick={() => selectMode('explain')}
                         style={{
                           display: 'flex', width: '100%', alignItems: 'center', gap: 8,
                           background: 'transparent', color: '#e5e7eb', border: 'none',
                           padding: '8px 10px', borderRadius: 8, cursor: 'pointer'
                         }}
                       >
-                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='question' ? '#43cea2' : '#6b7280' }} />
-                        Question
+                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='explain' ? '#43cea2' : '#6b7280' }} />
+                        Explain (with context)
+                      </button>
+                      <button
+                        className="menu-item"
+                        onClick={() => selectMode('chat')}
+                        style={{
+                          display: 'flex', width: '100%', alignItems: 'center', gap: 8,
+                          background: 'transparent', color: '#e5e7eb', border: 'none',
+                          padding: '8px 10px', borderRadius: 8, cursor: 'pointer'
+                        }}
+                      >
+                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='chat' ? '#43cea2' : '#6b7280' }} />
+                        Chat (no context)
                       </button>
                     </div>
                   )}
                 </div>
 
-                {/* Add page context (tabs drop-up) + Model selector to the right */}
+                {/* Add page context (tabs drop-up) + Screenshot + Model selector to the right */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   {/* Add page context (tabs drop-up) */}
                   <div style={{ position: 'relative' }} data-trigger="tabs">
@@ -668,6 +1090,28 @@ function App() {
                         )}
                       </div>
                     )}
+                  </div>
+
+                  {/* Screenshot icon - left of model selector */}
+                  <div style={{ position: 'relative' }}>
+                    <button
+                      className="icon-button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        try { console.log('[UI] Screenshot button clicked'); } catch {}
+                        handleCaptureFullPage();
+                      }}
+                      disabled={isLoading}
+                      aria-label="Capture page screenshot"
+                      title="Attach full-page screenshot"
+                      style={{ width: 30, height: 30, display: 'grid', placeItems: 'center', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent' }}
+                    >
+                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#3E3F29" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="6" width="18" height="12" rx="2" />
+                        <circle cx="9" cy="12" r="2.2" />
+                        <path d="M3 9h4l2-2h6l2 2h4" />
+                      </svg>
+                    </button>
                   </div>
 
                   {/* Model selector (drop-up) */}
