@@ -222,19 +222,12 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
 });
 
-// Support captureImage passthrough
-// Important: activeTab only applies to the tab that initiated the user gesture (e.g., the tab where the side panel/popup was opened).
-// When the user switches to a different tab and clicks the button inside the side panel UI, that new tab does NOT inherit activeTab automatically.
-// To reliably capture after switching tabs, we must either:
-//   1) have host permissions for all sites (<all_urls>) OR
-//   2) use chrome.action (or context menu) click directly on the target tab (user gesture on that tab), OR
-//   3) request host permission dynamically (MV3: chrome.permissions.request with origins).
-// Here we implement a best-effort fix:
-// - If lastSummarizeTabId exists and that tab is still active in its window, prefer that.
-// - Otherwise, use the currently active tab.
-// - Provide clearer error messages when permission is missing after a tab switch.
+// Unified background message handler for UI integrations (captureImage + listTabs + getTabContent)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === "captureImage") {
+  const action = message && message.action;
+
+  // 1) Capture image (existing behavior preserved)
+  if (action === "captureImage") {
     const useTabId = lastSummarizeTabId;
     const proceedWithCapture = (tab) => {
       if (!tab) {
@@ -243,9 +236,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }, (dataUrl) => {
         if (chrome.runtime.lastError) {
-          // Common cause: activeTab not granted for this tab after switching, or host permissions not sufficient.
           const msg = chrome.runtime.lastError.message || "";
-          // Provide guidance to UI
           sendResponse({
             error: msg.includes("'<all_urls>'") || msg.includes("'activeTab'")
               ? "Permission missing for the current tab. Open the side panel on the target tab (click the extension icon in that tab), or grant <all_urls> host permission."
@@ -260,7 +251,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (useTabId != null) {
       chrome.tabs.get(useTabId, (tab) => {
         if (chrome.runtime.lastError) {
-          // Fallback to active tab in current window
           chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => proceedWithCapture(tabs[0]));
         } else {
           proceedWithCapture(tab);
@@ -268,6 +258,76 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     } else {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => proceedWithCapture(tabs[0]));
+    }
+    return true;
+  }
+
+  // 2) List tabs for "Add page context" drop-up
+  if (action === "listTabs") {
+    chrome.tabs.query({ windowType: "normal" }, (tabs) => {
+      if (chrome.runtime.lastError) {
+        sendResponse({ error: chrome.runtime.lastError.message });
+        return;
+      }
+      const mapped = (tabs || []).map(t => ({
+        id: t.id, title: t.title, url: t.url, windowId: t.windowId, active: t.active, favIconUrl: t.favIconUrl
+      }));
+      sendResponse({ tabs: mapped });
+    });
+    return true;
+  }
+
+  // 3) Extract full page text content of a selected tab
+  if (action === "getTabContent") {
+    const targetId = message.tabId ?? sender?.tab?.id;
+    if (!targetId) {
+      sendResponse({ error: "No tabId provided" });
+      return; // sync
+    }
+
+    // Executed in the page
+    const extractor = () => {
+      try {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+        let text = "";
+        let node;
+        while ((node = walker.nextNode())) {
+          const t = (node.nodeValue || "").replace(/\s+/g, " ").trim();
+          if (t) text += t + "\n";
+        }
+        const title = document.title || "";
+        const desc = document.querySelector('meta[name="description"]')?.content || "";
+        return { ok: true, content: [title, desc, text].filter(Boolean).join("\n\n") };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
+    };
+
+    if (chrome.scripting && chrome.scripting.executeScript) {
+      chrome.scripting.executeScript({ target: { tabId: targetId }, func: extractor }, (results) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ error: chrome.runtime.lastError.message });
+          return;
+        }
+        const res = results && results[0] && results[0].result;
+        if (!res) {
+          sendResponse({ error: "No result from content extraction" });
+          return;
+        }
+        if (res.ok) sendResponse({ content: res.content });
+        else sendResponse({ error: res.error || "Unknown extraction error" });
+      });
+    } else {
+      // MV2 fallback if ever needed
+      chrome.tabs.executeScript(targetId, { code: `(${extractor})();` }, (results) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ error: chrome.runtime.lastError.message });
+          return;
+        }
+        const res = results && results[0];
+        if (res && res.ok) sendResponse({ content: res.content });
+        else sendResponse({ error: (res && res.error) || "Unknown extraction error" });
+      });
     }
     return true;
   }

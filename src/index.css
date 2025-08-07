@@ -60,7 +60,7 @@ body {
   position: sticky;
   top: 0;
   z-index: 10;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: #917e64;
   backdrop-filter: blur(10px);
 }
 
@@ -179,6 +179,40 @@ body {
   color: #e0e0e0;
   outline: none;
   transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Chat-like input surface and send button to match screenshot */
+.input-surface {
+  /* styles applied inline in JSX for backdrop + borders; keep class for future overrides */
+}
+
+.chatlike-input::placeholder {
+  color: #9ca3af;
+}
+
+.send-fab {
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: transparent;
+  color: #9ca3af;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform .15s ease, background-color .2s ease, color .2s ease, border-color .2s ease;
+}
+
+.send-fab:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: rgba(255,255,255,0.06);
+  color: #e5e7eb;
+  border-color: rgba(255,255,255,0.28);
+}
+
+.send-fab:disabled {
+  opacity: .5;
+  cursor: not-allowed;
 }
 
 /* Curved rectangular visual pill */

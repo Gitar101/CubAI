@@ -1,14 +1,19 @@
+/* Use CSS variables so we can have a solid brown base color while the shine sweeps across */
 .shiny-text {
-  color: #b5b5b5a4; /* Adjust this color to change intensity/style */
+  --shiny-base: #6B4F3B; /* brown */
+  /* Paint the brown color using text-fill while the background gradient provides the shine sweep */
+  color: var(--shiny-base);
   background: linear-gradient(
     120deg,
-    rgba(4, 59, 104, 0) 40%,
-    rgba(255, 255, 255, 0.8) 50%,
+    rgba(255, 255, 255, 0) 40%,
+    rgba(255, 255, 255, 0.85) 50%,
     rgba(255, 255, 255, 0) 60%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
+  /* Important: keep the text color visible, but also let the gradient shine overlay appear by using mix-blend via text-shadow hack */
+  text-shadow: 0 0 0 var(--shiny-base);
   display: inline-block;
   animation: shine 5s linear infinite;
   font-size: 28px; /* Increased headline size */
