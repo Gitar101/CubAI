@@ -8,6 +8,7 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [messageIdCounter, setMessageIdCounter] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState('');
   const [inputValue, setInputValue] = useState('');
   // Single full image (legacy) or multiple slices (new)
@@ -40,116 +41,12 @@ function App() {
   }, [selectedModel]);
 
   // Core chat streaming with optional page-context injection
-  const getGeminiResponse = async (currentMessages, includeContext) => {
-    setIsLoading(true);
-    setError('');
-    // Push an empty AI message for streaming fill
-    setMessageIdCounter(prevCounter => {
-      setMessages(prevMessages => [...prevMessages, { id: prevCounter, role: 'ai', content: [{ type: 'text', text: '' }] }]);
-      return prevCounter + 1;
-    });
-
-    try {
-      // Use selected model from header switcher; restrict to 2.0 variants only
-      const model = selectedModel === 'gemini-2.0-flash-lite' ? 'gemini-2.0-flash-lite' : 'gemini-2.0-flash';
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${GEMINI_API_KEY}`;
-      const headers = { 'Content-Type': 'application/json' };
-
-      // Conditionally inject hidden system instruction and context so they persist in-thread
-      const augmented = includeContext
-        ? [
-            ...(systemInstruction
-              ? [{ role: 'user', content: [{ type: 'text', text: `[INSTRUCTION]\n${systemInstruction}` }] }]
-              : []),
-            ...(systemContext
-              ? [{ role: 'user', content: [{ type: 'text', text: systemContext }] }]
-              : []),
-            ...currentMessages
-          ]
-        : [...currentMessages];
-
-      const formattedMessages = augmented.map(msg => {
-        const parts = msg.content.map(part => {
-          if (part.type === 'text') return { text: part.text };
-          if (part.type === 'image') return { inlineData: { mimeType: 'image/png', data: part.url.split(',')[1] } };
-          return {};
-        });
-        return { role: msg.role === 'ai' ? 'model' : 'user', parts };
-      });
-
-      const body = {
-        contents: formattedMessages,
-        generationConfig: { temperature: 0.2, topP: 0.95, topK: 64, maxOutputTokens: 8192 },
-      };
-
-      const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
-        let jsonStream = buffer;
-
-        while (true) {
-          const start = jsonStream.indexOf('{');
-          if (start === -1) break;
-
-          let braceCount = 0, end = -1, inString = false;
-          for (let i = start; i < jsonStream.length; i++) {
-            if (jsonStream[i] === '"' && (i === 0 || jsonStream[i - 1] !== '\\')) inString = !inString;
-            if (inString) continue;
-            if (jsonStream[i] === '{') braceCount++;
-            else if (jsonStream[i] === '}') braceCount--;
-            if (braceCount === 0) { end = i; break; }
-          }
-
-          if (end === -1) break;
-
-          const objectStr = jsonStream.substring(start, end + 1);
-          try {
-            const json = JSON.parse(objectStr);
-            if (json.candidates && json.candidates[0]?.content?.parts) {
-              const aiMessagePart = json.candidates[0].content.parts[0];
-              if (aiMessagePart?.text) {
-                setMessages(prev => {
-                  const newMessages = [...prev];
-                  const lastIdx = newMessages.length - 1;
-                  if (lastIdx >= 0 && newMessages[lastIdx].role === 'ai') {
-                    const updated = {
-                      ...newMessages[lastIdx],
-                      content: [{ ...newMessages[lastIdx].content[0], text: (newMessages[lastIdx].content[0]?.text || '') + aiMessagePart.text }]
-                    };
-                    newMessages[lastIdx] = updated;
-                    return newMessages;
-                  }
-                  return prev;
-                });
-              }
-            }
-            jsonStream = jsonStream.substring(end + 1);
-          } catch {
-            jsonStream = jsonStream.substring(start + 1);
-          }
-        }
-        buffer = jsonStream;
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
 
   useEffect(() => {
     if (chrome.runtime && chrome.runtime.onMessage) {
+      const isStreamingRef = { current: false };
+
       const listener = (message, sender, sendResponse) => {
         if (message.action === "setMode") {
           const m = message.mode;
@@ -164,35 +61,32 @@ function App() {
             }
           }
           return;
-        } else if (message.action === "appendAIMessage") {
-          // Treat summary as a normal AI message in chat (single insertion)
-          const text = (message.text || '').trim();
-          if (!text) return;
-
+        } else if (message.action === "startAIStream") {
+          setIsLoading(true);
+          isStreamingRef.current = true;
           setMessageIdCounter(prevCounter => {
-            // Prevent immediately consecutive duplicate insertions
-            let shouldInsert = true;
-            setMessages(prev => {
-              if (prev.length > 0) {
-                const last = prev[prev.length - 1];
-                const lastText = last?.content?.[0]?.text?.trim?.() || "";
-                if (last.role === 'ai' && lastText === text) {
-                  shouldInsert = false;
-                  return prev;
-                }
-              }
-              const next = shouldInsert
-                ? [...prev, { id: prevCounter, role: 'ai', content: [{ type: 'text', text }] }]
-                : prev;
-              return next;
-            });
-            return shouldInsert ? prevCounter + 1 : prevCounter;
+            setMessages(prev => [...prev, { id: prevCounter, role: 'ai', content: [{ type: 'text', text: '' }] }]);
+            return prevCounter + 1;
           });
-          // Keep reference copy to show in the summary section if present
-          setSummary(prev => (prev?.trim() === text ? prev : text));
-          setError('');
+        } else if (message.action === "appendAIMessageChunk") {
+          const textChunk = message.text || '';
+          if (!textChunk) return;
+          setMessages(prev => {
+            const newMessages = [...prev];
+            const lastIdx = newMessages.length - 1;
+            if (lastIdx >= 0 && newMessages[lastIdx].role === 'ai' && isStreamingRef.current) {
+              const updated = {
+                ...newMessages[lastIdx],
+                content: [{ ...newMessages[lastIdx].content[0], text: (newMessages[lastIdx].content[0]?.text || '') + textChunk }]
+              };
+              newMessages[lastIdx] = updated;
+            }
+            return newMessages;
+          });
+        } else if (message.action === "endAIStream") {
+          isStreamingRef.current = false;
+          setIsLoading(false);
         } else if (message.action === "appendSystemContext") {
-          // Store transcript in hidden system context for future turns
           const text = message.text || '';
           setSystemContext(text);
         } else if (message.action === "setContextPreview") {
@@ -207,6 +101,7 @@ function App() {
           });
         } else if (message.action === "displayError") {
           setError(message.error);
+          setIsLoading(false);
         }
       };
       chrome.runtime.onMessage.addListener(listener);
@@ -333,7 +228,7 @@ function App() {
   // Restore send flow with curved input, honoring current mode
   const handleSend = () => {
     if (!inputValue.trim() && !capturedImage && (!capturedSlices || capturedSlices.length === 0)) return;
-
+    setIsLoading(true);
     const buildAndSend = (includeCtx) => {
       const content = [];
       if (capturedImage) {
@@ -365,7 +260,13 @@ function App() {
       const updatedMessages = [...messages, newUserMessage];
       setMessages(updatedMessages);
       setMessageIdCounter(prev => prev + 1);
-      getGeminiResponse(updatedMessages, includeCtx);
+      chrome.runtime.sendMessage({
+        action: "sendChatMessage",
+        messages: updatedMessages,
+        systemInstruction,
+        systemContext: includeCtx ? systemContext : null,
+        model: selectedModel,
+      });
       setInputValue('');
       setCapturedImage(null);
       setCapturedSlices([]);

@@ -33,8 +33,7 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // Streaming summary to the side panel so conversation can continue
 async function callGeminiSummary(formattedTranscript, videoTitle = "") {
-  // Use the REST non-streaming endpoint for a single summary response; UI will insert it as an AI message.
- const endpointBase = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+  const endpointBase = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:streamGenerateContent";
   const prompt = [
     `You are CubAI. Summarize the YouTube video transcript comprehensively with accurate timing references.`,
     `Use this structure:`,
@@ -52,6 +51,34 @@ async function callGeminiSummary(formattedTranscript, videoTitle = "") {
     return;
   }
   const url = `${endpointBase}?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+  const extractJson = (str) => {
+    let braceCount = 0;
+    let inString = false;
+    const jsonStart = str.indexOf('{');
+    if (jsonStart === -1) return null;
+
+    for (let i = jsonStart; i < str.length; i++) {
+      const char = str[i];
+      if (char === '"' && (i === 0 || str[i - 1] !== '\\')) {
+        inString = !inString;
+      } else if (!inString) {
+        if (char === '{') braceCount++;
+        else if (char === '}') braceCount--;
+      }
+      if (!inString && braceCount === 0 && i >= jsonStart) {
+        const jsonStr = str.substring(jsonStart, i + 1);
+        const rest = str.substring(i + 1);
+        try {
+          return [JSON.parse(jsonStr), rest];
+        } catch (e) {
+          // Invalid JSON, continue searching from the next character
+        }
+      }
+    }
+    return null;
+  };
+
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -61,15 +88,39 @@ async function callGeminiSummary(formattedTranscript, videoTitle = "") {
         generationConfig: { temperature: 0.2, topP: 0.95, topK: 64, maxOutputTokens: 4096 }
       })
     });
+
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
       throw new Error(`Gemini API error: ${response.status} ${err?.error?.message || ''}`.trim());
     }
-    const data = await response.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "No summary generated.";
-    chrome.runtime.sendMessage({ action: "appendAIMessage", text });
+
+    chrome.runtime.sendMessage({ action: "startAIStream" });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      while (true) {
+        const result = extractJson(buffer);
+        if (!result) break;
+
+        const [jsonObj, restOfBuffer] = result;
+        buffer = restOfBuffer;
+
+        const textChunk = jsonObj?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        if (textChunk) {
+          chrome.runtime.sendMessage({ action: "appendAIMessageChunk", text: textChunk });
+        }
+      }
+    }
+    chrome.runtime.sendMessage({ action: "endAIStream" });
   } catch (e) {
     chrome.runtime.sendMessage({ action: "displayError", error: e.message || String(e) });
+    chrome.runtime.sendMessage({ action: "endAIStream" });
   }
 }
 
@@ -242,6 +293,100 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const action = message && message.action;
 
+  if (action === "sendChatMessage") {
+    const { messages, systemInstruction, systemContext } = message;
+
+    // 1. Merge consecutive messages to ensure strict user/model alternation.
+    const merged = [];
+    if (messages && messages.length > 0) {
+      // Filter out empty messages
+      const sourceMessages = messages.filter(m => m.content && m.content.some(p => (p.text || p.url)));
+      if (sourceMessages.length > 0) {
+        // Deep copy first message
+        merged.push(JSON.parse(JSON.stringify(sourceMessages[0])));
+        for (let i = 1; i < sourceMessages.length; i++) {
+          const currentMsg = sourceMessages[i];
+          const lastMergedMsg = merged[merged.length - 1];
+          if (currentMsg.role === lastMergedMsg.role) {
+            // Merge content with last message
+            lastMergedMsg.content.push(...JSON.parse(JSON.stringify(currentMsg.content)));
+          } else {
+            // Add new message
+            merged.push(JSON.parse(JSON.stringify(currentMsg)));
+          }
+        }
+      }
+    }
+
+    // 2. Ensure conversation starts with 'user' role, preserving context from initial AI messages.
+    let finalMessages = [];
+    if (merged.length > 0) {
+      const firstUserIndex = merged.findIndex(m => m.role === 'user');
+      
+      if (firstUserIndex === -1) {
+        chrome.runtime.sendMessage({ action: "displayError", error: "Cannot send a message without user input." });
+        return;
+      }
+      
+      // If there are AI messages before the first user message (e.g., a summary),
+      // combine their text content and prepend it to the first user message.
+      if (firstUserIndex > 0) {
+        const aiContextMessages = merged.slice(0, firstUserIndex);
+        const firstUserMessage = merged[firstUserIndex];
+        const restOfMessages = merged.slice(firstUserIndex + 1);
+        
+        // Extract text from AI context messages
+        const aiText = aiContextMessages
+          .map(aiMsg => aiMsg.content.map(p => p.text || '').join('\n'))
+          .join('\n\n');
+        
+        // Prepend AI context to the first user message's content
+        firstUserMessage.content.unshift({ type: 'text', text: `Given the summary:\n${aiText}\n\n---\n\n` });
+        
+        finalMessages = [firstUserMessage, ...restOfMessages];
+      } else {
+        // No preceding AI messages, use the merged list as is.
+        finalMessages = merged;
+      }
+    }
+
+    // 3. Convert to the final API format.
+    const contents = finalMessages.map(msg => ({
+      role: msg.role === 'ai' ? 'model' : 'user',
+      parts: msg.content
+        .map(part => {
+          if (part.type === 'image' && part.url) {
+            const match = part.url.match(/^data:(image\/(?:jpeg|png|webp));base64,(.*)$/);
+            if (match) return { inlineData: { mimeType: match[1], data: match[2] } };
+            return null; // Skip invalid image URLs
+          }
+          if (part.type === 'text' && part.text) return { text: part.text };
+          return null; // Skip other part types or empty text
+        })
+        .filter(Boolean) // Remove nulls
+    }));
+
+    // 4. Add page context to the last user message's parts.
+    if (systemContext && contents.length > 0) {
+      const lastContent = contents[contents.length - 1];
+      if (lastContent.role === 'user') {
+        lastContent.parts.unshift({ text: `Page Context:\n${systemContext}` });
+      }
+    }
+
+    // Filter out any messages that ended up with no parts
+    const finalContents = contents.filter(c => c.parts.length > 0);
+
+    const generationConfig = {
+      temperature: 0.7,
+      topP: 0.95,
+      topK: 64,
+      maxOutputTokens: 8192,
+    };
+
+    streamGeminiResponse(finalContents, generationConfig, systemInstruction);
+    return true; // Keep message channel open for streaming
+  }
   // 1) Capture image (existing behavior preserved)
   if (action === "captureImage") {
     const useTabId = lastSummarizeTabId;
@@ -598,3 +743,86 @@ chrome.webRequest.onBeforeRequest.addListener(
   },
   { urls: ["*://*.youtube.com/*"] }
 );
+
+// Helper to stream Gemini responses
+async function streamGeminiResponse(contents, generationConfig, systemInstruction) {
+  const endpointBase = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent";
+  if (!GEMINI_API_KEY) {
+    chrome.runtime.sendMessage({ action: "displayError", error: "Missing VITE_GEMINI_API_KEY in background. Add it to .env and rebuild." });
+    return;
+  }
+  const url = `${endpointBase}?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+  const extractJson = (str) => {
+    let braceCount = 0;
+    let inString = false;
+    const jsonStart = str.indexOf('{');
+    if (jsonStart === -1) return null;
+
+    for (let i = jsonStart; i < str.length; i++) {
+      const char = str[i];
+      if (char === '"' && (i === 0 || str[i - 1] !== '\\')) {
+        inString = !inString;
+      } else if (!inString) {
+        if (char === '{') braceCount++;
+        else if (char === '}') braceCount--;
+      }
+      if (!inString && braceCount === 0 && i >= jsonStart) {
+        const jsonStr = str.substring(jsonStart, i + 1);
+        const rest = str.substring(i + 1);
+        try {
+          return [JSON.parse(jsonStr), rest];
+        } catch (e) {
+          // Invalid JSON, continue searching
+        }
+      }
+    }
+    return null;
+  };
+
+  const body = { contents, generationConfig };
+  if (systemInstruction) {
+    body.systemInstruction = { role: 'system', parts: [{ text: systemInstruction }] };
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`Gemini API error: ${response.status} ${err?.error?.message || ''}`.trim());
+    }
+
+    chrome.runtime.sendMessage({ action: "startAIStream" });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      while (true) {
+        const result = extractJson(buffer);
+        if (!result) break;
+
+        const [jsonObj, restOfBuffer] = result;
+        buffer = restOfBuffer;
+
+        const textChunk = jsonObj?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        if (textChunk) {
+          chrome.runtime.sendMessage({ action: "appendAIMessageChunk", text: textChunk });
+        }
+      }
+    }
+    chrome.runtime.sendMessage({ action: "endAIStream" });
+  } catch (e) {
+    chrome.runtime.sendMessage({ action: "displayError", error: e.message || String(e) });
+    chrome.runtime.sendMessage({ action: "endAIStream" });
+  }
+}
