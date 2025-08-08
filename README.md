@@ -1,10 +1,10 @@
-# AI Sidekick - Enhanced UI
+# CubAI - Enhanced UI
 
 ![CubAI Logo](public/cubai2.png)
 
 ## Overview
 
-AI Sidekick - Enhanced UI is an innovative application designed to provide an enhanced user interface for interacting with AI models, specifically leveraging the Google Gemini API. This project aims to offer a seamless and intuitive experience for various AI-powered tasks, including conversational chat, content summarization, and detailed explanations based on provided page context. It also features advanced capabilities like full-page screenshot capture for visual context.
+CubAI - Enhanced UI is an innovative application designed to provide an enhanced user interface for interacting with AI models, specifically leveraging the Google Gemini API. This project aims to offer a seamless and intuitive experience for various AI-powered tasks, including conversational chat, content summarization, and detailed explanations based on provided page context. It also features advanced capabilities like full-page screenshot capture for visual context.
 
 ## Features
 
@@ -42,8 +42,8 @@ Before you begin, ensure you have the following installed:
 
 1.  **Clone the repository**:
     ```bash
-    git clone https://github.com/your-username/ai-sidekick-enhanced-ui.git
-    cd ai-sidekick-enhanced-ui
+    git clone https://github.com/your-username/cubai-enhanced-ui.git
+    cd cubai-enhanced-ui
     ```
 
 2.  **Install dependencies**:
@@ -78,7 +78,7 @@ npm run build
 
 ## Usage
 
-Once the application is running, you can interact with the AI Sidekick through its intuitive interface.
+Once the application is running, you can interact with CubAI through its intuitive interface.
 
 -   **Type your questions** in the input field at the bottom.
 -   **Switch modes** (Chat, Summarize, Explain) using the icon on the left side of the input bar.

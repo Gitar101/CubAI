@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "AI Sidekick",
+  "name": "CubAI",
   "version": "1.0",
   "description": "A React-based Chrome extension sidebar.",
   "permissions": [
@@ -24,7 +24,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Open AI Sidekick"
+    "default_title": "Open CubAI"
   },
   "content_scripts": [
     {
