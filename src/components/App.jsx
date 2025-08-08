@@ -17,14 +17,18 @@ function App() {
   const [capturedSlices, setCapturedSlices] = useState([]); // [{url,w,h,index}]
   // Keep the full transcript as hidden system context so replies stay accurate
   const [systemContext, setSystemContext] = useState('');
-  // Hidden system instruction to prepend to the request (do NOT show in UI)
-  const [systemInstruction, setSystemInstruction] = useState('Answer strictly and only the user question using the page context. If unknown in context, say you cannot find it.');
-  // Summary will arrive as a normal AI message now; retain for reference if needed
   const [summary, setSummary] = useState('');
+
+  const systemPrompts = {
+    Summarize: 'Summarize the provided context, ensuring all key points are covered comprehensively.',
+    Explain: 'Analyze the user\'s question and answer it based on the provided context. If the question cannot be answered from the context, use Google Search to find the information from the web. Specifically, you MUST use Google Search to get information from the web about specific stuff.',
+    Chat: 'Engage in a conversational chat with the user. Answer questions based on the provided context. If the question cannot be answered from the context, use Google Search to find the information from the web.',
+  };
 
   // UI state: system prompt mode and drop-ups
   // modes: "chat" | "explain" | "summarize"
   const [mode, setMode] = useState('chat');
+  const systemInstruction = systemPrompts[mode];
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [showTabsMenu, setShowTabsMenu] = useState(false);
   const [availableTabs, setAvailableTabs] = useState([]);
@@ -52,13 +56,6 @@ function App() {
           const m = message.mode;
           if (m === 'explain' || m === 'summarize' || m === 'chat') {
             setMode(m);
-            if (m === 'summarize') {
-              setSystemInstruction('Summarize the provided page context succinctly with key points and structure.');
-            } else if (m === 'explain') {
-              setSystemInstruction('Explain clearly using ONLY the attached page context. If something is not in the context, say you cannot find it.');
-            } else if (m === 'chat') {
-              setSystemInstruction('You are a helpful assistant. Answer conversationally. Do not reference page context.');
-            }
           }
           return;
         } else if (message.action === "startAIStream") {
@@ -121,16 +118,8 @@ function App() {
   const selectMode = (m) => {
     setMode(m);
     // Update the hidden instruction used for requests
-    if (m === 'summarize') {
-      setSystemInstruction('Summarize the provided page context succinctly with key points and structure.');
-    } else if (m === 'explain') {
-      setSystemInstruction('Explain clearly using ONLY the attached page context. If something is not in the context, say you cannot find it.');
-    } else if (m === 'chat') {
-      // Chat mode: do not rely on page context at all
-      setSystemInstruction('You are a helpful assistant. Answer conversationally. Do not reference page context.');
-    } else {
-      setSystemInstruction('Answer strictly and only the user question using the page context. If unknown in context, say you cannot find it.');
-    }
+    // The systemInstruction is now derived from the mode state and systemPrompts object.
+    // No need to set it explicitly here.
     setShowModeMenu(false);
   };
 
@@ -169,8 +158,14 @@ function App() {
 
   // UI preview card of last added page context
   const [contextPreview, setContextPreview] = useState(null);
-  // Track whether the last user turn included page context, to render a placeholder badge in-thread
-  const [lastTurnUsedContext, setLastTurnUsedContext] = useState(false);
+  // Track whether the context pill has been rendered in a message bubble for the current contextPreview
+  const [hasContextPillBeenRendered, setHasContextPillBeenRendered] = useState(false);
+
+  // Update context preview and reset pill rendering status
+  const updateContextPreview = (newPreview) => {
+    setContextPreview(newPreview);
+    setHasContextPillBeenRendered(false); // Reset when new context is set
+  };
 
   const addTabContext = (tabId) => {
     try {
@@ -192,7 +187,7 @@ function App() {
         // Build a preview card for the composer
         const title = tabMeta?.title || 'Untitled';
         const url = tabMeta?.url || '';
-        setContextPreview({
+        updateContextPreview({
           title,
           url,
           origin: (() => {
@@ -252,8 +247,10 @@ function App() {
       // and the model receives systemContext separately.
 
       // If we have context and a preview URL, append a hidden context-url token as a separate part
-      if (includeCtx && contextPreview?.url) {
+      // ONLY if it's the first time we're rendering the pill for this context.
+      if (includeCtx && contextPreview?.url && !hasContextPillBeenRendered) {
         content.push({ type: 'text', text: `//context-url: ${contextPreview.url}` });
+        setHasContextPillBeenRendered(true); // Mark as rendered
       }
 
       const newUserMessage = { id: messageIdCounter, role: 'user', content };
@@ -270,53 +267,59 @@ function App() {
       setInputValue('');
       setCapturedImage(null);
       setCapturedSlices([]);
-      setLastTurnUsedContext(!!includeCtx);
     };
 
-    if (mode === 'chat') {
-      // Pure chat: no page context collection or injection
-      buildAndSend(false);
-      return;
-    }
+    // Only include page context for 'explain' and 'summarize' modes.
+    const shouldIncludeContext = mode === 'explain' || mode === 'summarize';
 
-    // Non-chat modes must include page content. Ensure we have it; if not, fetch from background.
-    const haveContext = !!(systemContext && systemContext.trim().length > 0);
-    if (haveContext && contextPreview?.url) {
-      buildAndSend(true);
-      return;
-    }
+    if (shouldIncludeContext) {
+      // Always try to fetch context from the active tab if context is needed.
+      try {
+        chrome.runtime.sendMessage({ action: "getActiveTabCubAIContext" }, (resp) => {
+          if (chrome.runtime.lastError || !resp || !resp.ok) {
+            const errMsg = resp?.error || chrome.runtime.lastError?.message || "Failed to get page context";
+            if (mode === 'chat') {
+              console.warn(`[CubAI] Could not get page context for chat: ${errMsg}. Sending without it.`);
+              buildAndSend(false);
+            } else {
+              setError(errMsg);
+              setIsLoading(false);
+            }
+            return;
+          }
+          
+          const { context, tabMeta } = resp;
+          
+          // Check if the context URL has changed
+          const currentTabUrl = tabMeta?.url || '';
+          const previousContextUrl = contextPreview?.url || '';
 
-    try {
-      chrome.runtime.sendMessage({ action: "getActiveTabCubAIContext" }, (resp) => {
-        if (chrome.runtime.lastError) {
-          setError(chrome.runtime.lastError.message);
-          return;
-        }
-        if (!resp || !resp.ok) {
-          setError(resp?.error || "Failed to obtain page context");
-          return;
-        }
-        const { context, tabMeta } = resp;
-        setSystemContext(context || '');
+          if (currentTabUrl !== previousContextUrl) {
+            // New page context, reset pill status
+            setSystemContext(context || '');
+            updateContextPreview({ // This will set hasContextPillBeenRendered to false
+              title: tabMeta?.title || 'Untitled',
+              url: currentTabUrl,
+              origin: (() => { try { return new URL(currentTabUrl).origin; } catch { return currentTabUrl; } })(),
+              favIconUrl: tabMeta?.favIconUrl || '',
+              tabId: tabMeta?.id
+            });
+          } else {
+            // Same page context, just update systemContext if it changed (e.g., content updated)
+            setSystemContext(context || '');
+            // No need to call updateContextPreview, as it would reset hasContextPillBeenRendered unnecessarily.
+            // contextPreview remains the same, and hasContextPillBeenRendered retains its value.
+          }
 
-        const meta = tabMeta || {};
-        const url = meta.url || '';
-        const title = meta.title || 'Untitled';
-        setContextPreview({
-          title,
-          url,
-          origin: (() => {
-            try { return new URL(url).origin; } catch { return url; }
-          })(),
-          favIconUrl: meta.favIconUrl || '',
-          tabId: meta.id
+          buildAndSend(true); // Send with context
         });
-
-        // After storing, send the message including context
-        buildAndSend(true);
-      });
-    } catch (e) {
-      setError(String(e?.message || e));
+      } catch (e) {
+        setError(String(e?.message || e));
+        setIsLoading(false);
+      }
+    } else {
+      // This path is for subsequent messages in 'chat' mode without context.
+      buildAndSend(false);
     }
   };
   const handleInputChange = (e) => setInputValue(e.target.value);
@@ -740,8 +743,8 @@ function App() {
               </button>
             </div>
           )}
-          {/* Screenshot preview chip */}
-          {capturedImage && (
+          {/* Screenshot preview chip (single image or multiple slices) */}
+          {(capturedImage || capturedSlices.length > 0) && (
             <div
               style={{
                 display: 'flex',
@@ -755,23 +758,41 @@ function App() {
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              <div style={{ width: 58, height: 38, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.2)', background: '#111317' }}>
-                <img
-                  src={capturedImage}
-                  alt="Page capture preview"
-                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                />
-              </div>
+              {capturedImage && (
+                <div style={{ width: 58, height: 38, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.2)', background: '#111317' }}>
+                  <img
+                    src={capturedImage}
+                    alt="Page capture preview"
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                  />
+                </div>
+              )}
+              {capturedSlices.length > 0 && (
+                <div style={{ display: 'flex', gap: 4, overflowX: 'auto', maxWidth: 200 }}>
+                  {capturedSlices.map((slice, idx) => (
+                    <div key={idx} style={{ flexShrink: 0, width: 58, height: 38, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.2)', background: '#111317' }}>
+                      <img
+                        src={slice.url}
+                        alt={`Page capture slice ${idx + 1}`}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <div style={{ fontWeight: 600, color: '#1b1b1b' }}>
                   Page screenshot
                 </div>
                 <div style={{ fontSize: 12, color: '#3E3F29' }}>
-                  {captureMeta?.w}×{captureMeta?.h}{captureMeta?.kb ? ` • ~${captureMeta.kb} KB` : ''}
+                  {capturedSlices.length > 0 ?
+                    `${capturedSlices.length} slices${captureMeta?.kb ? ` • ~${captureMeta.kb} KB` : ''}` :
+                    `${captureMeta?.w}×${captureMeta?.h}${captureMeta?.kb ? ` • ~${captureMeta.kb} KB` : ''}`
+                  }
                 </div>
               </div>
               <button
-                onClick={(e) => { e.stopPropagation(); setCapturedImage(null); setCaptureMeta(null); }}
+                onClick={(e) => { e.stopPropagation(); setCapturedImage(null); setCapturedSlices([]); setCaptureMeta(null); }}
                 aria-label="Remove screenshot"
                 title="Remove screenshot"
                 style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#3E3F29', cursor: 'pointer' }}
@@ -800,7 +821,7 @@ function App() {
             <input
               type="text"
               className="chatlike-input"
-              placeholder={mode === 'chat' ? 'Chat without page context…' : 'Ask with page context…'}
+              placeholder={mode === 'chat' ? 'Chat with CubAI…' : 'Ask with page context…'}
               value={inputValue}
               onChange={handleInputChange}
               onKeyPress={handleKeyPress}

@@ -1,6 +1,9 @@
 
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 // Service worker boot log
 console.log("[CubAI] Background service worker started");
+
 
 chrome.action.onClicked.addListener((tab) => {
   console.log("[CubAI] chrome.action.onClicked -> open side panel for window", tab?.windowId);
@@ -11,6 +14,14 @@ chrome.action.onClicked.addListener((tab) => {
 const GEMINI_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY)
   ? import.meta.env.VITE_GEMINI_API_KEY
   : undefined;
+
+// Configure the client
+const ai = new GoogleGenerativeAI(GEMINI_API_KEY);
+
+// Define the grounding tool
+const groundingTool = {
+  googleSearch: {},
+};
 
 // Create context menu items
 chrome.runtime.onInstalled.addListener(() => {
@@ -370,7 +381,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (systemContext && contents.length > 0) {
       const lastContent = contents[contents.length - 1];
       if (lastContent.role === 'user') {
-        lastContent.parts.unshift({ text: `Page Context:\n${systemContext}` });
+        const userTextPart = lastContent.parts.find(p => p.text && !p.text.startsWith('//'));
+        
+        // The context from `explainWithCubAI` is already formatted as "user-message: ...".
+        // Raw context comes from other flows.
+        const formattedContext = systemContext.startsWith('user-message:')
+          ? systemContext
+          : `user-message: ${systemContext}`;
+
+        if (userTextPart) {
+          const userQuestion = userTextPart.text;
+          userTextPart.text = `${formattedContext}\nuser-message: "${userQuestion}"`;
+        } else {
+          // If user only sent an image, add context as a text part.
+          lastContent.parts.unshift({ text: formattedContext });
+        }
       }
     }
 
@@ -535,6 +560,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       const run = () => {
+        // Note: Full page scroll capture for PDFs might not work reliably due to how browsers render them
+        // (e.g., within embedded viewers that don't expose standard scroll properties to the main document).
+        // This attempts to capture slices for all pages, including PDFs, but may only capture the visible viewport for PDFs.
         try { console.log("[CaptureFullPage][SW] Executing captureSlices in tab", tab.id); } catch {}
         chrome.scripting.executeScript({ target: { tabId: tab.id }, func: captureSlices, args: [maxWidth, quality] }, (results) => {
           if (chrome.runtime.lastError) {
@@ -746,78 +774,25 @@ chrome.webRequest.onBeforeRequest.addListener(
 
 // Helper to stream Gemini responses
 async function streamGeminiResponse(contents, generationConfig, systemInstruction) {
-  const endpointBase = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent";
   if (!GEMINI_API_KEY) {
     chrome.runtime.sendMessage({ action: "displayError", error: "Missing VITE_GEMINI_API_KEY in background. Add it to .env and rebuild." });
     return;
   }
-  const url = `${endpointBase}?key=${encodeURIComponent(GEMINI_API_KEY)}`;
 
-  const extractJson = (str) => {
-    let braceCount = 0;
-    let inString = false;
-    const jsonStart = str.indexOf('{');
-    if (jsonStart === -1) return null;
+  const model = ai.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-    for (let i = jsonStart; i < str.length; i++) {
-      const char = str[i];
-      if (char === '"' && (i === 0 || str[i - 1] !== '\\')) {
-        inString = !inString;
-      } else if (!inString) {
-        if (char === '{') braceCount++;
-        else if (char === '}') braceCount--;
-      }
-      if (!inString && braceCount === 0 && i >= jsonStart) {
-        const jsonStr = str.substring(jsonStart, i + 1);
-        const rest = str.substring(i + 1);
-        try {
-          return [JSON.parse(jsonStr), rest];
-        } catch (e) {
-          // Invalid JSON, continue searching
-        }
-      }
-    }
-    return null;
-  };
-
-  const body = { contents, generationConfig };
+  const request = { contents, generationConfig, tools: [groundingTool] };
   if (systemInstruction) {
-    body.systemInstruction = { role: 'system', parts: [{ text: systemInstruction }] };
+    request.systemInstruction = { role: 'system', parts: [{ text: systemInstruction }] };
   }
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(`Gemini API error: ${response.status} ${err?.error?.message || ''}`.trim());
-    }
-
     chrome.runtime.sendMessage({ action: "startAIStream" });
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      while (true) {
-        const result = extractJson(buffer);
-        if (!result) break;
-
-        const [jsonObj, restOfBuffer] = result;
-        buffer = restOfBuffer;
-
-        const textChunk = jsonObj?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        if (textChunk) {
-          chrome.runtime.sendMessage({ action: "appendAIMessageChunk", text: textChunk });
-        }
+    const result = await model.generateContentStream(request);
+    for await (const chunk of result.stream) {
+      const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      if (textChunk) {
+        chrome.runtime.sendMessage({ action: "appendAIMessageChunk", text: textChunk });
       }
     }
     chrome.runtime.sendMessage({ action: "endAIStream" });
