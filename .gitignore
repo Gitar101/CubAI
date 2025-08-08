@@ -12,3 +12,15 @@ yarn-error.log*
 # Env
 .env.local
 .env.*.local
+# IDE and Editor files
+.vscode/
+
+# Test coverage
+/coverage
+
+# Build artifacts (if not already covered by /dist)
+/build
+
+# Temporary files
+*.log
+*.tmp
