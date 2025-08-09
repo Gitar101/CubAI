@@ -23,9 +23,9 @@ function App() {
   const [isContextVisible, setIsContextVisible] = useState(true); // Keep it simple for now
 
   const systemPrompts = {
-    Summarize: 'Summarize the provided context, ensuring all key points are covered comprehensively.',
-    Explain: 'Analyze the user\'s question and answer it based on the provided context. If the question cannot be answered from the context, use Google Search to find the information from the web. Specifically, you MUST use Google Search to get information from the web about specific stuff.',
-    Chat: 'Engage in a conversational chat with the user. Answer questions based on the provided context. If the question cannot be answered from the context, use Google Search to find the information from the web.',
+    Summarize: 'Summarize the provided context. If the context is straightforward, give a concise summary. If it’s complex, give a full, detailed summary covering all key points. Always ground information using Google Search for accuracy.',
+    Explain: 'Analyze the user’s question. If it only needs a direct answer, reply concisely. If it needs depth, give a thorough, structured explanation. Use Google Search to verify facts and fetch missing or specific information.',
+    Chat: 'Engage naturally with the user. Give short answers for simple questions and detailed responses when explanation is needed. If information is missing or specific, use Google Search to get it and ground your response.',
   };
 
   // UI state: system prompt mode and drop-ups

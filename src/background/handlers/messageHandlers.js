@@ -213,90 +213,82 @@ function handleCaptureFullPage(message, sender, sendResponse) {
   // Note: The following function executes IN PAGE CONTEXT. Do not reference variables from SW scope.
   const captureSlices = async (maxWidth, quality) => {
     try {
-      // Defensive window/document resolution
       const doc = document;
-      const root = doc && (doc.documentElement || doc.body || null);
-      if (!root) {
-        return { ok: false, error: "No document root available" };
+      if (!doc || !doc.body) {
+        return { ok: false, error: "No document body available" };
       }
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-      // Compute total height safely
-      const docEl = doc.documentElement || {};
-      const body = doc.body || {};
-      const totalHeight = Math.max(
-        Number(docEl.scrollHeight) || 0,
-        Number(body.scrollHeight) || 0,
-        Number(docEl.offsetHeight) || 0,
-        Number(body.offsetHeight) || 0,
-        Number(docEl.clientHeight) || 0
-      );
-      const viewportH = Math.max(1, window.innerHeight || 0);
+      // Find the main scrollable element
+      const findScrollableElement = () => {
+        const candidates = [document.documentElement, document.body];
+        let bestCandidate = document.documentElement;
+        
+        // Check for elements with explicit overflow style
+        const elements = document.querySelectorAll('*');
+        for (const el of elements) {
+          const style = window.getComputedStyle(el);
+          if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+            if (el.scrollHeight > el.clientHeight) {
+              candidates.push(el);
+            }
+          }
+        }
+
+        // Determine the best candidate based on scroll height
+        for (const el of candidates) {
+          if (el.scrollHeight > bestCandidate.scrollHeight) {
+            bestCandidate = el;
+          }
+        }
+        return bestCandidate;
+      };
+
+      const scrollableElement = findScrollableElement();
+      const totalHeight = scrollableElement.scrollHeight;
+      const viewportH = window.innerHeight;
       const steps = Math.max(1, Math.ceil(totalHeight / viewportH));
 
-      // Freeze overflow to keep layout stable
-      const original = {
-        scrollX: window.scrollX || 0,
-        scrollY: window.scrollY || 0,
-        overflowY: docEl.style ? docEl.style.overflowY : '',
-        bodyOverflowY: body && body.style ? body.style.overflowY : ''
-      };
-      if (docEl && docEl.style) docEl.style.overflowY = 'hidden';
-      if (body && body.style) body.style.overflowY = 'hidden';
-
+      const originalScrollTop = scrollableElement.scrollTop;
       const slices = [];
 
       for (let i = 0; i < steps; i++) {
         const y = i * viewportH;
-        try {
-          window.scrollTo({ top: y, left: 0, behavior: 'instant' });
-        } catch {}
-        await sleep(150);
+        scrollableElement.scrollTo({ top: y, left: 0, behavior: 'instant' });
+        await sleep(200); // Increased delay for dynamic content
 
-        // Ask background to capture current viewport
         const dataUrl = await new Promise((resolve) => {
-          try {
-            chrome.runtime.sendMessage({ action: "captureImage" }, (resp) => {
-              if (!resp || chrome.runtime.lastError) {
-                resolve("");
-                return;
-              }
-              resolve(resp.dataUrl || "");
-            });
-          } catch {
-            resolve("");
-          }
+          chrome.runtime.sendMessage({ action: "captureImage" }, (resp) => {
+            resolve(resp && !chrome.runtime.lastError ? resp.dataUrl : "");
+          });
         });
+
         if (!dataUrl) continue;
 
-        // Downscale and recompress to fit budget
         const img = new Image();
-        await new Promise((res) => { img.onload = res; img.onerror = () => res(); img.src = dataUrl; });
+        await new Promise((res) => { img.onload = res; img.onerror = res; img.src = dataUrl; });
 
-        const w = Math.max(1, img.width || 1);
-        const scale = Math.min(1, maxWidth / w);
-        const outW = Math.floor(w * scale);
+        const scale = Math.min(1, maxWidth / (img.width || 1));
+        const outW = Math.floor((img.width || 1) * scale);
         const outH = Math.floor((img.height || 1) * scale);
         const canvas = document.createElement('canvas');
-        canvas.width = outW; canvas.height = outH;
+        canvas.width = outW;
+        canvas.height = outH;
         const ctx = canvas.getContext('2d');
-        if (ctx && typeof ctx.imageSmoothingQuality !== 'undefined') ctx.imageSmoothingQuality = 'high';
-        try { ctx.drawImage(img, 0, 0, outW, outH); } catch (e) {
-          return { ok: false, error: "Canvas draw failed: " + (e && e.message ? e.message : String(e)) };
+        if (ctx) {
+          ctx.imageSmoothingQuality = 'high';
+          ctx.drawImage(img, 0, 0, outW, outH);
         }
         const jpeg = canvas.toDataURL('image/jpeg', quality);
-
         slices.push({ url: jpeg, w: outW, h: outH, index: i });
       }
 
-      // Restore overflow/scroll
-      try { window.scrollTo(original.scrollX || 0, original.scrollY || 0); } catch {}
-      if (docEl && docEl.style) docEl.style.overflowY = original.overflowY || '';
-      if (body && body.style) body.style.overflowY = original.bodyOverflowY || '';
+      // Restore original scroll position
+      scrollableElement.scrollTo({ top: originalScrollTop, left: 0, behavior: 'instant' });
 
       return { ok: true, slices };
     } catch (e) {
-      return { ok: false, error: (e && e.message) ? e.message : String(e) };
+      return { ok: false, error: e.message || String(e) };
     }
   };
 

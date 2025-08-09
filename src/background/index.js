@@ -21,7 +21,7 @@ setupYoutubeIntegration();
 // Handle side panel opening
 chrome.action.onClicked.addListener(async (tab) => {
   console.log("[CubAI] chrome.action.onClicked -> open side panel for tab", tab?.id);
-  const currentWindow = await chrome.windows.getCurrent();
-  // openSidePanel(tab.id);
-  await chrome.sidePanel.open({ windowId: currentWindow.id });
+  // The user gesture context can be lost after an async call.
+  // It's safer and more direct to open the panel for the specific tab that was clicked.
+  await chrome.sidePanel.open({ tabId: tab.id });
 });
