@@ -24,7 +24,7 @@ export default defineConfig(({ mode }) => {
     rollupOptions: {
       input: {
         main: 'index.html',
-        background: 'src/background.js'
+        background: 'src/background/index.js'
       },
       output: {
         entryFileNames: chunkInfo => {

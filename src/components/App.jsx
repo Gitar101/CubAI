@@ -10,6 +10,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState('');
+  const [showClearChatButton, setShowClearChatButton] = useState(false);
   const [inputValue, setInputValue] = useState('');
   // Single full image (legacy) or multiple slices (new)
   const [capturedImage, setCapturedImage] = useState(null);
@@ -106,6 +107,21 @@ function App() {
     }
   }, []);
 
+  const clearChat = () => {
+    setMessages([]);
+    setMessageIdCounter(0);
+    setSystemContext('');
+    setSummary('');
+    setCapturedImage(null);
+    setCapturedSlices([]);
+    setCaptureMeta(null);
+    setContextPreview(null);
+    setHasContextPillBeenRendered(false);
+    setError('');
+    setIsLoading(false);
+    setIsStreaming(false);
+  };
+
   // Removed "ask a follow up question" flow. Normal chat now covers this.
 
   // Toggle and populate system prompt switcher (drop-up)
@@ -121,6 +137,21 @@ function App() {
     // The systemInstruction is now derived from the mode state and systemPrompts object.
     // No need to set it explicitly here.
     setShowModeMenu(false);
+    // If the mode is "Summarize", trigger a page refresh / re-summarization
+    if (m === 'Summarize') {
+      console.log("[CubAI] Attempting to send refreshSummarization message");
+      try {
+        chrome.runtime.sendMessage({ action: "refreshSummarization" }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.error("[CubAI] Error in refreshSummarization response:", chrome.runtime.lastError);
+          } else {
+            console.log("[CubAI] refreshSummarization message sent successfully");
+          }
+        });
+      } catch (e) {
+        console.error("[CubAI] Error sending refreshSummarization message:", e);
+      }
+    }
   };
 
   // Model select helpers
@@ -322,8 +353,42 @@ function App() {
       buildAndSend(false);
     }
   };
-  const handleInputChange = (e) => setInputValue(e.target.value);
-  const handleKeyPress = (e) => { if (e.key === 'Enter') handleSend(); };
+  const handleInputChange = (e) => {
+    const textarea = e.target;
+    textarea.style.height = 'auto'; // Reset height to auto to calculate new height
+    textarea.style.height = textarea.scrollHeight + 'px'; // Set height to scrollHeight
+    setInputValue(textarea.value);
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      if (e.shiftKey) {
+        // Allow new line with Shift+Enter
+        setInputValue(prev => prev + '\n');
+        e.preventDefault();
+      } else {
+        handleSend();
+      }
+    }
+  };
+
+  const handlePaste = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        const blob = item.getAsFile();
+        const reader = new FileReader();
+        reader.onload = () => {
+          setCapturedImage(reader.result);
+        };
+        reader.readAsDataURL(blob);
+        e.preventDefault();
+        break;
+      }
+    }
+  };
 
   // Request page capture. Background now returns multiple slices (no stitching).
   const handleCaptureFullPage = async () => {
@@ -409,6 +474,26 @@ function App() {
 
           {/* Spacer */}
           <div style={{ flex: 1 }} />
+
+          {/* Clear chat button */}
+          <button
+            onClick={clearChat}
+            aria-label="Clear chat"
+            title="Clear chat"
+            style={{
+              background: '#F5EFE6', /* Cream color */
+              border: '1px solid #7D8D86', /* Matching border from palette */
+              color: '#a17f51ff', /* Creamy brown color for the plus sign, matching background */
+              cursor: 'pointer',
+              fontSize: '20px', /* Slightly smaller font for better fit */
+              fontWeight: 'bold',
+              padding: '4px 12px', /* Thicker padding */
+              borderRadius: '8px', /* Rounded corners */
+              boxShadow: '0 2px 4px rgba(0,0,0,0.1)', /* Subtle shadow */
+            }}
+          >
+            +
+          </button>
 
           {/* Model switch removed per request */}
         </div>
@@ -818,14 +903,15 @@ function App() {
             }}
           >
             {/* Top row: placeholder-like input */}
-            <input
-              type="text"
+            <textarea
               className="chatlike-input"
               placeholder={mode === 'chat' ? 'Chat with CubAI…' : 'Ask with page context…'}
               value={inputValue}
               onChange={handleInputChange}
-              onKeyPress={handleKeyPress}
+              onKeyDown={handleKeyPress}
+              onPaste={handlePaste}
               disabled={isLoading}
+              rows="1"
               style={{
                 background: 'transparent',
                 border: `1px solid #7D8D86`,

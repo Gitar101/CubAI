@@ -49,5 +49,15 @@
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "strict_min_version": "109.0"
+    }
+  },
+  "icons": {
+    "16": "cubai2.png",
+    "48": "cubai2.png",
+    "128": "cubai2.png"
   }
 }

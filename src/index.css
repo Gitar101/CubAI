@@ -186,6 +186,13 @@ body {
   /* styles applied inline in JSX for backdrop + borders; keep class for future overrides */
 }
 
+.chatlike-input {
+  resize: none;
+  overflow-y: auto;
+  max-height: 40vh;
+  line-height: 1.5;
+}
+
 .chatlike-input::placeholder {
   color: #9ca3af;
 }
