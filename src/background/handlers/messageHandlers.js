@@ -12,6 +12,8 @@ let isFetching = false;
 export function setupMessageHandlers() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const action = message && message.action;
+    const type = message && message.type;
+
 
     if (action === "sendChatMessage") {
       return handleSendChatMessage(message, sender, sendResponse);
@@ -38,7 +40,6 @@ export function setupMessageHandlers() {
     }
 
     if (action === "refreshSummarization") {
-      console.log("[CubAI] Received refreshSummarization message");
       refreshYouTubeTab();
       sendResponse({ success: true });
       return true; // Keep the message channel open
@@ -120,7 +121,18 @@ async function handleSendChatMessage(message, sender, sendResponse) {
       .filter(Boolean) // Remove nulls
   }));
 
-  // 4. Add page context to the last user message's parts.
+  // 4. Add user-selected context from the message object.
+  const lastFinalMessage = finalMessages[finalMessages.length - 1];
+  if (lastFinalMessage && lastFinalMessage.contexts && lastFinalMessage.contexts.length > 0 && contents.length > 0) {
+    const lastContent = contents[contents.length - 1];
+    if (lastContent.role === 'user') {
+      const contextString = lastFinalMessage.contexts.join('\n\n---\n\n');
+      const formattedContext = `Context:\n${contextString}\n\n`;
+      lastContent.parts.unshift({ text: formattedContext });
+    }
+  }
+
+  // 5. Add page context to the last user message's parts.
   if (systemContext && contents.length > 0) {
     const lastContent = contents[contents.length - 1];
     if (lastContent.role === 'user') {

@@ -4,6 +4,7 @@
   "version": "1.0",
   "description": "A React-based Chrome extension sidebar.",
   "permissions": [
+    "sidebarAction",
     "sidePanel",
     "storage",
     "activeTab",

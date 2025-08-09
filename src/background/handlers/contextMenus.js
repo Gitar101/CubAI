@@ -19,7 +19,6 @@ let summarizeState = {
 // Create context menu items
 export function setupContextMenus() {
   chrome.runtime.onInstalled.addListener(() => {
-    console.log("[CubAI] onInstalled -> creating context menus");
     // Existing YouTube summarize (kept)
     chrome.contextMenus.create({
       id: "summarizeWithCubAI",
@@ -33,12 +32,27 @@ export function setupContextMenus() {
       title: "Explain Using CubAI",
       contexts: ["all"]
     });
-    console.log("[CubAI] Context menus created");
+    // New context menu for adding selected text to context
+    chrome.contextMenus.create({
+      id: "add_to_context",
+      title: "Add to CubAI context",
+      contexts: ["selection"]
+    });
   });
 
   // On click for context menus
   chrome.contextMenus.onClicked.addListener((info, tab) => {
-    console.log("[CubAI] contextMenus.onClicked", info?.menuItemId, "tabId=", tab?.id, "url=", tab?.url);
+    if (info.menuItemId === "add_to_context") {
+      // Get the existing context, add the new selection, and save it.
+      chrome.storage.local.get('cubext', (data) => {
+        const existingContext = data.cubext || [];
+        const newContext = [...existingContext, info.selectionText];
+        chrome.storage.local.set({ cubext: newContext });
+      });
+      // Open the side panel for the correct window
+      chrome.sidePanel.open({ windowId: tab.windowId });
+      return;
+    }
     if (info.menuItemId === "explainWithCubAI") {
       // Open the side panel immediately in response to user gesture
       openSidePanel(tab.id);

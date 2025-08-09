@@ -19,6 +19,8 @@ function App() {
   // Keep the full transcript as hidden system context so replies stay accurate
   const [systemContext, setSystemContext] = useState('');
   const [summary, setSummary] = useState('');
+  const [contexts, setContexts] = useState([]); // Changed to handle multiple contexts
+  const [isContextVisible, setIsContextVisible] = useState(true); // Keep it simple for now
 
   const systemPrompts = {
     Summarize: 'Summarize the provided context, ensuring all key points are covered comprehensively.',
@@ -40,14 +42,35 @@ function App() {
 
   // Debug helper to verify selection is applied
   useEffect(() => {
-    try {
-      console.log('[ModelSelector] Selected model changed:', selectedModel);
-    } catch {}
   }, [selectedModel]);
 
   // Core chat streaming with optional page-context injection
+  const removeContext = (index) => {
+    const newContexts = contexts.filter((_, i) => i !== index);
+    setContexts(newContexts);
+    chrome.storage.local.set({ cubext: newContexts });
+  };
+  
+useEffect(() => {
+    // On component mount, try to get the context from storage.
+    const handleStorageChange = (changes, area) => {
+      if (area === 'local' && changes.cubext) {
+        setContexts(changes.cubext.newValue || []);
+      }
+    };
 
+    chrome.storage.local.get('cubext', (data) => {
+      if (data && data.cubext) {
+        setContexts(data.cubext);
+      }
+    });
 
+    chrome.storage.onChanged.addListener(handleStorageChange);
+
+    return () => {
+      chrome.storage.onChanged.removeListener(handleStorageChange);
+    };
+  }, []);
   useEffect(() => {
     if (chrome.runtime && chrome.runtime.onMessage) {
       const isStreamingRef = { current: false };
@@ -139,15 +162,8 @@ function App() {
     setShowModeMenu(false);
     // If the mode is "Summarize", trigger a page refresh / re-summarization
     if (m === 'Summarize') {
-      console.log("[CubAI] Attempting to send refreshSummarization message");
       try {
-        chrome.runtime.sendMessage({ action: "refreshSummarization" }, (response) => {
-          if (chrome.runtime.lastError) {
-            console.error("[CubAI] Error in refreshSummarization response:", chrome.runtime.lastError);
-          } else {
-            console.log("[CubAI] refreshSummarization message sent successfully");
-          }
-        });
+        chrome.runtime.sendMessage({ action: "refreshSummarization" });
       } catch (e) {
         console.error("[CubAI] Error sending refreshSummarization message:", e);
       }
@@ -256,6 +272,8 @@ function App() {
     if (!inputValue.trim() && !capturedImage && (!capturedSlices || capturedSlices.length === 0)) return;
     setIsLoading(true);
     const buildAndSend = (includeCtx) => {
+     const finalUserInput = inputValue;
+
       const content = [];
       if (capturedImage) {
         content.push({ type: 'image', url: capturedImage });
@@ -272,7 +290,7 @@ function App() {
         const totalKB = Math.round(capturedSlices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
         content.push({ type: 'text', text: `//image-slices: ${capturedSlices.length} • ~${totalKB} KB` });
       }
-      if (inputValue.trim()) content.push({ type: 'text', text: inputValue });
+      if (finalUserInput.trim()) content.push({ type: 'text', text: finalUserInput });
 
       // Do NOT inject any “Attached page context: …” text. The composer pill indicates attached context,
       // and the model receives systemContext separately.
@@ -284,7 +302,7 @@ function App() {
         setHasContextPillBeenRendered(true); // Mark as rendered
       }
 
-      const newUserMessage = { id: messageIdCounter, role: 'user', content };
+      const newUserMessage = { id: messageIdCounter, role: 'user', content, contexts: contexts };
       const updatedMessages = [...messages, newUserMessage];
       setMessages(updatedMessages);
       setMessageIdCounter(prev => prev + 1);
@@ -298,6 +316,10 @@ function App() {
       setInputValue('');
       setCapturedImage(null);
       setCapturedSlices([]);
+      if (contexts.length > 0) {
+        setContexts([]);
+        chrome.storage.local.set({ cubext: [] });
+      }
     };
 
     // Only include page context for 'explain' and 'summarize' modes.
@@ -520,6 +542,15 @@ function App() {
               className={`message ${msg.role}-message`}
               style={{ border: '1px solid #3E3F29', background: 'rgba(255,255,255,0.55)', color: '#1b1b1b' }}
             >
+              {msg.contexts && msg.contexts.length > 0 && (
+                <div className="context-pills-container" style={{ marginBottom: '10px' }}>
+                  {msg.contexts.map((context, index) => (
+                    <div key={index} className="context-pill" style={{ padding: '8px 12px', marginBottom: '5px', borderRadius: '8px', background: 'rgba(0,0,0,0.1)', border: '1px solid #7D8D86', color: '#1b1b1b', fontSize: '14px' }}>
+                      <p style={{ margin: '0', fontStyle: 'italic' }}>{context}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
               {msg.content.map((part, i) => {
                 const key = `${msg.id}-${i}`;
 
@@ -767,6 +798,18 @@ function App() {
             maxWidth: 820,
           }}
         >
+           {/* Context Indicator */}
+           {isContextVisible && contexts.map((context, index) => (
+            <div key={index} style={{ padding: '8px 12px', marginBottom: '10px', borderRadius: '8px', background: 'rgba(0,0,0,0.1)', border: '1px solid #7D8D86', color: '#1b1b1b', fontSize: '14px', position: 'relative' }}>
+              <p style={{ margin: '4px 0 0', fontStyle: 'italic' }}>{context}</p>
+              <button
+                onClick={() => removeContext(index)}
+                style={{ position: 'absolute', top: '4px', right: '4px', background: 'transparent', border: 'none', cursor: 'pointer', color: '#3E3F29' }}
+              >
+                &#x2715;
+              </button>
+            </div>
+           ))}
           {/* Context preview pill/card */}
           {contextPreview && (
             <div

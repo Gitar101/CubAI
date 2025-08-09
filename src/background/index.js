@@ -19,7 +19,9 @@ setupMessageHandlers();
 setupYoutubeIntegration();
 
 // Handle side panel opening
-chrome.action.onClicked.addListener((tab) => {
+chrome.action.onClicked.addListener(async (tab) => {
   console.log("[CubAI] chrome.action.onClicked -> open side panel for tab", tab?.id);
-  openSidePanel(tab.id);
+  const currentWindow = await chrome.windows.getCurrent();
+  // openSidePanel(tab.id);
+  await chrome.sidePanel.open({ windowId: currentWindow.id });
 });
