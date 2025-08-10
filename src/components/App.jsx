@@ -1,5 +1,36 @@
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
+
+// Create plugin arrays to ensure they're properly configured
+const remarkPlugins = [remarkGfm, remarkMath];
+const rehypePlugins = [rehypeKatex];
+
+// Function to convert LaTeX code blocks to proper markdown math syntax
+const convertLatexCodeBlocks = (text) => {
+  if (!text) return text;
+
+  // Convert ```latex blocks to display math $$...$$
+  // Handle both newline and non-newline cases
+  let converted = text.replace(/```latex\s*\n?([\s\S]*?)\n?```/g, (_, formula) => {
+    return `$$${formula.trim()}$$`;
+  });
+
+  // Convert \(...\) to $...$
+  converted = converted.replace(/\\\((.*?)\\\)/g, (_, formula) => {
+    return `$${formula}$`;
+  });
+
+  // Convert \[...\] to $$...$$
+  converted = converted.replace(/\\\[([\s\S]*?)\\]/g, (_, formula) => {
+    return `$$${formula.trim()}$$`;
+  });
+
+  return converted;
+};
 import ShinyText from './ShinyText';
 import SilkBackground from './SilkBackground.jsx';
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -23,9 +54,9 @@ function App() {
   const [isContextVisible, setIsContextVisible] = useState(true); // Keep it simple for now
 
   const systemPrompts = {
-    Summarize: 'Summarize the provided context. If the context is straightforward, give a concise summary. If it’s complex, give a full, detailed summary covering all key points. Always ground information using Google Search for accuracy.',
-    Explain: 'Analyze the user’s question. If it only needs a direct answer, reply concisely. If it needs depth, give a thorough, structured explanation. Use Google Search to verify facts and fetch missing or specific information.',
-    Chat: 'Engage naturally with the user. Give short answers for simple questions and detailed responses when explanation is needed. If information is missing or specific, use Google Search to get it and ground your response.',
+    Summarize: 'Summarize the provided context. If the context is straightforward, give a concise summary. If it’s complex, give a full, detailed summary covering all key points. Always ground information using Google Search for accuracy. For mathematical expressions, use markdown math syntax: $formula$ for inline math and $$formula$$ for display math.',
+    Explain: 'Analyze the user’s question. If it only needs a direct answer, reply concisely. If it needs depth, give a thorough, structured explanation. Use Google Search to verify facts and fetch missing or specific information. For mathematical expressions, use markdown math syntax: $formula$ for inline math and $$formula$$ for display math.',
+    Chat: 'Engage naturally with the user. Give short answers for simple questions and detailed responses when explanation is needed. If information is missing or specific, use Google Search to get it and ground your response. For mathematical expressions, use markdown math syntax: $formula$ for inline math and $$formula$$ for display math. Never use code blocks for LaTeX formulas.',
   };
 
   // UI state: system prompt mode and drop-ups
@@ -532,7 +563,40 @@ useEffect(() => {
             return shouldPin ? (
               <div className="summary-section">
                 <h3>Summary:</h3>
-                <ReactMarkdown>{summary}</ReactMarkdown>
+                <ReactMarkdown
+                  remarkPlugins={remarkPlugins}
+                  rehypePlugins={rehypePlugins}
+                  components={{
+                    table: ({node, ...props}) => (
+                      <table style={{
+                        borderCollapse: 'collapse',
+                        width: '100%',
+                        margin: '12px 0',
+                        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                        borderRadius: '8px',
+                        overflow: 'hidden'
+                      }} {...props} />
+                    ),
+                    th: ({node, ...props}) => (
+                      <th style={{
+                        border: '1px solid rgba(255, 255, 255, 0.15)',
+                        padding: '8px 12px',
+                        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                        fontWeight: 600,
+                        color: '#f0f0f0'
+                      }} {...props} />
+                    ),
+                    td: ({node, ...props}) => (
+                      <td style={{
+                        border: '1px solid rgba(255, 255, 255, 0.15)',
+                        padding: '8px 12px',
+                        color: '#e0e0e0'
+                      }} {...props} />
+                    )
+                  }}
+                >
+                  {convertLatexCodeBlocks(summary)}
+                </ReactMarkdown>
               </div>
             ) : null;
           })()}
@@ -660,7 +724,43 @@ useEffect(() => {
                   const url = urlMatch ? urlMatch[0] : null;
 
                   // Render text first
-                  const textNode = <ReactMarkdown key={key + '-md'}>{text}</ReactMarkdown>;
+                  const textNode = (
+                    <ReactMarkdown
+                      key={key + '-md'}
+                      remarkPlugins={remarkPlugins}
+                      rehypePlugins={rehypePlugins}
+                      components={{
+                        table: ({node, ...props}) => (
+                          <table style={{
+                            borderCollapse: 'collapse',
+                            width: '100%',
+                            margin: '12px 0',
+                            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                            borderRadius: '8px',
+                            overflow: 'hidden'
+                          }} {...props} />
+                        ),
+                        th: ({node, ...props}) => (
+                          <th style={{
+                            border: '1px solid rgba(255, 255, 255, 0.15)',
+                            padding: '8px 12px',
+                            backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                            fontWeight: 600,
+                            color: '#f0f0f0'
+                          }} {...props} />
+                        ),
+                        td: ({node, ...props}) => (
+                          <td style={{
+                            border: '1px solid rgba(255, 255, 255, 0.15)',
+                            padding: '8px 12px',
+                            color: '#e0e0e0'
+                          }} {...props} />
+                        )
+                      }}
+                    >
+                      {convertLatexCodeBlocks(text)}
+                    </ReactMarkdown>
+                  );
 
                   if (!url) {
                     return textNode;

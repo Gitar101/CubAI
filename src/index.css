@@ -272,6 +272,70 @@ body {
     font-style: italic;
 }
 
+/* Table Styling for ReactMarkdown */
+.message table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.message th,
+.message td {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.message th {
+  background-color: rgba(255, 255, 255, 0.1);
+  font-weight: 600;
+  color: #f0f0f0;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.message td {
+  color: #e0e0e0;
+}
+
+.message tr:nth-child(even) {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.message tr:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Responsive table styling */
+@media (max-width: 768px) {
+  .message table {
+    font-size: 12px;
+  }
+
+  .message th,
+  .message td {
+    padding: 6px 8px;
+  }
+}
+
+/* LaTeX Math Styling */
+.message .katex {
+  font-size: 1.1em;
+}
+
+.message .katex-display {
+  margin: 16px 0;
+  text-align: center;
+}
+
+.message .katex-display .katex {
+  font-size: 1.2em;
+}
+
 /* Floating curved input bar spacing and stacking */
 .floating-input-bar {
   pointer-events: none;         /* allow clicks to pass except inside children we enable */

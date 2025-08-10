@@ -36,6 +36,7 @@ export async function streamGeminiResponse(contents, generationConfig, systemIns
       }
     }
     chrome.runtime.sendMessage({ action: "endAIStream" });
+    console.log("Full raw text from API:", fullResponse);
     return fullResponse;
   } catch (e) {
     chrome.runtime.sendMessage({ action: "displayError", error: e.message || String(e) });
