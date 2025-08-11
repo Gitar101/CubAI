@@ -213,8 +213,8 @@ async function handleSendChatMessage(message, sender, sendResponse) {
 
   try {
     // First Call (for General Response and Grounding)
-    // Get the selected model from the message or default to gemini-2.0-flash
-    const modelName = message.model || "gemini-2.0-flash";
+    // Get the selected model from the message or default to gemini-2.5-flash
+    const modelName = message.model || "gemini-2.5-flash";
     const assistantResponse = await streamGeminiResponse(finalContents, defaultGenerationConfig, systemInstruction, modelName);
 
     // Second Call (for User Memory) - After the response is complete

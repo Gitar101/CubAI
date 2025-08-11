@@ -63,26 +63,35 @@ export function setupContextMenus() {
 
     if (info.menuItemId !== "summarizeWithCubAI") return;
 
-    // Refresh the YouTube page to ensure the latest transcript is available
-    if (tab && tab.id) {
-      chrome.tabs.reload(tab.id);
+    const now = Date.now();
+    if (summarizeState.summarizeInProgress || (now - summarizeState.lastSummarizeTs) < SUMMARIZE_DEBOUNCE_MS) {
+      console.log("[CubAI] Summarization already in progress or too recent");
+      return;
     }
 
-    const now = Date.now();
-    if (summarizeState.summarizeInProgress || (now - summarizeState.lastSummarizeTs) < SUMMARIZE_DEBOUNCE_MS) return;
+    console.log("[CubAI] Context menu: Starting summarization for tab", tab?.id);
 
+    // Set the summarization state
     summarizeState.summarizeInProgress = true;
     summarizeState.lastSummarizeTs = now;
     summarizeState.lastSummarizeTabId = tab?.id || null;
+    summarizeState.lastSummarizeVideoId = null; // Reset so we can process current video
     summarizeState.activeSummarizeToken = newToken();
 
     // Open the side panel
     openSidePanel(tab.id);
 
-    // Reset summarize state after a timeout
+    // Refresh the YouTube page to ensure the latest transcript is available
+    // This will trigger the timedtext request that our handler is now listening for
+    if (tab && tab.id) {
+      chrome.tabs.reload(tab.id);
+    }
+
+    // Reset summarize state after a timeout (fallback in case something goes wrong)
     setTimeout(() => {
+      console.log("[CubAI] Timeout: Resetting summarization state");
       resetSummarizeState();
-    }, SUMMARIZE_DEBOUNCE_MS * 2);
+    }, SUMMARIZE_DEBOUNCE_MS * 4); // Longer timeout to allow for transcript processing
   });
 }
 
@@ -123,7 +132,15 @@ async function handleExplainWithCubAI(info, tab) {
 
 // Reset the summarize state
 function resetSummarizeState() {
+  console.log("[CubAI] Resetting summarization state");
   summarizeState.summarizeInProgress = false;
+  summarizeState.lastSummarizeTabId = null;
+  summarizeState.lastSummarizeVideoId = null;
+  summarizeState.activeSummarizeToken = null;
+  if (summarizeState.summarizeDebounceTimer) {
+    clearTimeout(summarizeState.summarizeDebounceTimer);
+    summarizeState.summarizeDebounceTimer = null;
+  }
 }
 
 // Get the current summarize state
@@ -135,3 +152,10 @@ export function getSummarizeState() {
 export function setSummarizeState(newState) {
   summarizeState = { ...summarizeState, ...newState };
 }
+
+// Listen for reset messages from the Gemini API
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "resetSummarizeState") {
+    resetSummarizeState();
+  }
+});

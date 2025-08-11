@@ -8,7 +8,7 @@ import { readUserMemory, writeUserMemory } from '../utils/userMemory.js';
 export const ai = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 // Helper to stream Gemini responses
-export async function streamGeminiResponse(contents, generationConfig, systemInstruction, modelName = "gemini-2.0-flash") {
+export async function streamGeminiResponse(contents, generationConfig, systemInstruction, modelName = "gemini-2.5-flash") {
   if (!GEMINI_API_KEY) {
     chrome.runtime.sendMessage({ action: "displayError", error: "Missing VITE_GEMINI_API_KEY in background. Add it to .env and rebuild." });
     return null;
@@ -103,12 +103,12 @@ export async function callGeminiUserMemoryTool(contents, tools) {
   }
 
   const model = ai.getGenerativeModel({
-    model: "gemini-2.0-flash-lite",
+    model: "gemini-2.5-flash-lite",
     generationConfig: {
       temperature: 0.7,
       topP: 0.8,
       topK: 40,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 10000,
     }
   });
 
@@ -169,8 +169,8 @@ export async function callGeminiSummary(formattedTranscript, videoTitle = "", vi
     return;
   }
 
-  const model = ai.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
-  
+  const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
+
   // Retrieve user memory to include in the system prompt
   const userMemory = await readUserMemory();
   let userMemoryText = "";
@@ -183,7 +183,8 @@ export async function callGeminiSummary(formattedTranscript, videoTitle = "", vi
     userMemoryText = `\n\nABOUT USER:\n${userMemory.memories.join('\n')}`;
   }
 
-  const prompt = [
+  // Create system prompt without the transcript
+  const systemPrompt = [
     `You are CubAI. Summarize the YouTube video transcript comprehensively with accurate timing references. You should use Google Search to ground your responses when necessary.${userMemoryText}`,
     `Use this structure:`,
     `- Overview (2-3 lines)`,
@@ -191,10 +192,45 @@ export async function callGeminiSummary(formattedTranscript, videoTitle = "", vi
     `- Key Takeaways`,
     videoTitle ? `Video Title: ${videoTitle}` : ``,
     videoUrl ? `Video URL: ${videoUrl}` : ``,
-    ``,
-    `Transcript (with timestamps):`,
-    formattedTranscript
   ].filter(Boolean).join('\n');
+
+  // Create user message with just a simple request
+  const userMessage = "Please analyze the attached transcript.txt file.";
+
+  // Convert transcript to proper base64 for file upload
+  // Use a more efficient method that handles large files properly
+  const transcriptSizeBytes = new Blob([formattedTranscript]).size;
+  console.log("[CubAI] Transcript size:", transcriptSizeBytes, "bytes");
+
+  // For very large transcripts, we might need to truncate or split them
+  // For now, let's use a more robust base64 conversion
+  let transcriptBase64;
+  try {
+    // Use FileReader for proper base64 conversion that handles large files
+    const transcriptBlob = new Blob([formattedTranscript], { type: 'text/plain' });
+    transcriptBase64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        // Remove the data URL prefix to get just the base64 data
+        const base64 = reader.result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(transcriptBlob);
+    });
+
+    console.log("[CubAI] Base64 conversion successful. Length:", transcriptBase64.length);
+  } catch (conversionError) {
+    console.error("[CubAI] Base64 conversion failed:", conversionError);
+    throw new Error("Failed to convert transcript to base64");
+  }
+
+  const transcriptPart = {
+    inlineData: {
+      mimeType: 'text/plain',
+      data: transcriptBase64
+    }
+  };
 
   try {
     chrome.runtime.sendMessage({ action: "startAIStream" });
@@ -202,12 +238,19 @@ export async function callGeminiSummary(formattedTranscript, videoTitle = "", vi
 
     const result = await model.generateContentStream({
       tools: [groundingTool],
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      systemInstruction: { role: 'system', parts: [{ text: systemPrompt }] },
+      contents: [{
+        role: "user",
+        parts: [
+          { text: userMessage },
+          transcriptPart
+        ]
+      }],
       generationConfig: {
         temperature: 0.2,
         topK: 32,
         topP: 0.95,
-        maxOutputTokens: 1024,
+        maxOutputTokens: 65535,
       }
     });
 
@@ -219,8 +262,8 @@ export async function callGeminiSummary(formattedTranscript, videoTitle = "", vi
     }
 
     chrome.runtime.sendMessage({ action: "endAIStream" });
-    chrome.runtime.sendMessage({ 
-      action: "appendUserMessage", 
+    chrome.runtime.sendMessage({
+      action: "appendUserMessage",
       text: `//context-url: ${videoUrl}`,
       silent: true
     });

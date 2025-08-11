@@ -68,7 +68,7 @@ function App() {
   const [availableTabs, setAvailableTabs] = useState([]);
 
   // Model selector (only gemini 2.0 variants)
-  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
   const [showModelMenu, setShowModelMenu] = useState(false);
 
   // Debug helper to verify selection is applied
@@ -572,7 +572,7 @@ useEffect(() => {
                         borderCollapse: 'collapse',
                         width: '100%',
                         margin: '12px 0',
-                        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                        backgroundColor: 'rgb(107 79 59)',
                         borderRadius: '8px',
                         overflow: 'hidden'
                       }} {...props} />
@@ -735,7 +735,7 @@ useEffect(() => {
                             borderCollapse: 'collapse',
                             width: '100%',
                             margin: '12px 0',
-                            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                            backgroundColor: 'rgb(107 79 59)',
                             borderRadius: '8px',
                             overflow: 'hidden'
                           }} {...props} />
@@ -1282,7 +1282,7 @@ useEffect(() => {
                       style={{ height: 30, display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent', padding: '0 8px' }}
                     >
                       <span style={{ fontSize: 12, color: '#3E3F29', fontWeight: 600 }}>
-                        {selectedModel === 'gemini-2.0-flash-lite' ? 'G2 Flash Lite' : 'G2 Flash'}
+                        {selectedModel === 'gemini-2.5-flash-lite' ? 'G2 Flash Lite' : 'G2 Flash'}
                       </span>
                       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#3E3F29" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M6 9l6 6 6-6" />
@@ -1312,28 +1312,28 @@ useEffect(() => {
                           onMouseDown={(e) => { e.stopPropagation(); }}
                           onClick={(e) => {
                             e.stopPropagation();
-                            try { console.log('[ModelSelector] Select gemini-2.0-flash'); } catch {}
-                            setSelectedModel('gemini-2.0-flash');
+                            try { console.log('[ModelSelector] Select gemini-2.5-flash'); } catch {}
+                            setSelectedModel('gemini-2.5-flash');
                             setShowModelMenu(false);
                           }}
                           style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
                         >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.0-flash' ? '#43cea2' : '#6b7280' }} />
-                          gemini-2.0-flash
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash' ? '#43cea2' : '#6b7280' }} />
+                          gemini-2.5-flash
                         </button>
                         <button
                           className="menu-item"
                           onMouseDown={(e) => { e.stopPropagation(); }}
                           onClick={(e) => {
                             e.stopPropagation();
-                            try { console.log('[ModelSelector] Select gemini-2.0-flash-lite'); } catch {}
-                            setSelectedModel('gemini-2.0-flash-lite');
+                            try { console.log('[ModelSelector] Select gemini-2.5-flash-lite'); } catch {}
+                            setSelectedModel('gemini-2.5-flash-lite');
                             setShowModelMenu(false);
                           }}
                           style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
                         >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.0-flash-lite' ? '#43cea2' : '#6b7280' }} />
-                          gemini-2.0-flash-lite
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash-lite' ? '#43cea2' : '#6b7280' }} />
+                          gemini-2.5-flash-lite
                         </button>
                       </div>
                     )}
