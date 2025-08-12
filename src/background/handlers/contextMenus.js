@@ -116,15 +116,21 @@ async function handleExplainWithCubAI(info, tab) {
 
     // Prepare the context and user query
     const context = response.context || "";
-    const userQuery = response.ask || info.selectionText || "Explain this page";
+    const userQuery = response.ask || info.selectionText || "";
 
     // Send the context and query to the side panel after a short delay to ensure side panel is ready
     setTimeout(() => {
       chrome.runtime.sendMessage({
-        action: "setUiMode",
+        action: "setMode",
         mode: "explain",
         context: context,
-        query: userQuery
+        query: userQuery,
+        tabMeta: {
+          title: tab.title,
+          url: tab.url,
+          favIconUrl: tab.favIconUrl,
+          id: tab.id
+        }
       });
     }, 200); // 200ms delay
   });

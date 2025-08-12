@@ -190,21 +190,18 @@ async function handleSendChatMessage(message, sender, sendResponse) {
   if (systemContext && contents.length > 0) {
     const lastContent = contents[contents.length - 1];
     if (lastContent.role === 'user') {
-      const userTextPart = lastContent.parts.find(p => p.text && !p.text.startsWith('//'));
-      
-      // The context from `explainWithCubAI` is already formatted as "user-message: ...".
-      // Raw context comes from other flows.
-      const formattedContext = systemContext.startsWith('user-message:')
-        ? systemContext
-        : `user-message: ${systemContext}`;
+      // Convert the system context to a base64 encoded string
+      const encoder = new TextEncoder();
+      const data = encoder.encode(systemContext);
+      const base64 = btoa(String.fromCharCode(...data));
 
-      if (userTextPart) {
-        const userQuestion = userTextPart.text;
-        userTextPart.text = `${formattedContext}\nuser-message: "${userQuestion}"`;
-      } else {
-        // If user only sent an image, add context as a text part.
-        lastContent.parts.unshift({ text: formattedContext });
-      }
+      // Add the inline data to the message parts
+      lastContent.parts.push({
+        inlineData: {
+          mimeType: 'text/plain',
+          data: base64,
+        },
+      });
     }
   }
 

@@ -107,7 +107,7 @@
   function preparePayload() {
     const context = collectVisibleText();
     const selected = getSelectedText();
-    const ask = selected ? `explain "${selected}" to me` : "explain x to me";
+    const ask = selected ? `explain "${selected}" to me` : "";
     const line1 = `user-message: ${context}`;
     const line2 = `user-message: "${ask}"`;
     try {

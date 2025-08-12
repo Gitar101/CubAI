@@ -111,6 +111,16 @@ useEffect(() => {
           const m = message.mode;
           if (m === 'explain' || m === 'summarize' || m === 'chat') {
             setMode(m);
+            // Set the input value and system context if provided
+            if (message.query) {
+              setInputValue(message.query);
+            }
+            if (message.context) {
+              setSystemContext(message.context);
+            }
+            if (message.tabMeta) {
+              updateContextPreview(message.tabMeta);
+            }
           }
           return;
         } else if (message.action === "startAIStream") {
@@ -343,6 +353,7 @@ useEffect(() => {
         systemInstruction,
         systemContext: includeCtx ? systemContext : null,
         model: selectedModel,
+        file: includeCtx ? new Blob([systemContext], { type: 'text/plain' }) : null
       });
       setInputValue('');
       setCapturedImage(null);

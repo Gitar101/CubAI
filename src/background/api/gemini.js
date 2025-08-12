@@ -23,6 +23,25 @@ export async function streamGeminiResponse(contents, generationConfig, systemIns
     request.systemInstruction = { role: 'system', parts: [{ text: systemInstruction }] };
   }
 
+  if (request.file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(',');
+      request.contents.push({
+        role: 'user',
+        parts: [
+          {
+            inlineData: {
+              mimeType: 'text/plain',
+              data: base64
+            }
+          }
+        ]
+      });
+    };
+    reader.readAsDataURL(request.file);
+  }
+
   let fullResponse = "";
 
   try {
