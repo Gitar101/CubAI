@@ -190,10 +190,18 @@ async function handleSendChatMessage(message, sender, sendResponse) {
   if (systemContext && contents.length > 0) {
     const lastContent = contents[contents.length - 1];
     if (lastContent.role === 'user') {
+      console.log("DEBUG: Adding systemContext to the message parts.", { systemContext: systemContext.substring(0, 100) + "..." });
       // Convert the system context to a base64 encoded string
       const encoder = new TextEncoder();
       const data = encoder.encode(systemContext);
-      const base64 = btoa(String.fromCharCode(...data));
+      // Efficiently convert ArrayBuffer to Base64
+      let binary = '';
+      const bytes = new Uint8Array(data);
+      const len = bytes.byteLength;
+      for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
 
       // Add the inline data to the message parts
       lastContent.parts.push({
@@ -202,6 +210,7 @@ async function handleSendChatMessage(message, sender, sendResponse) {
           data: base64,
         },
       });
+      console.log("DEBUG: systemContext added successfully.");
     }
   }
 
@@ -544,8 +553,8 @@ function handleCaptureFullPage(message, sender, sendResponse) {
           ctx.imageSmoothingQuality = 'high';
           ctx.drawImage(img, 0, 0, outW, outH);
         }
-        const jpeg = canvas.toDataURL('image/jpeg', quality);
-        slices.push({ url: jpeg, w: outW, h: outH, index: i });
+        const png = canvas.toDataURL('image/png');
+        slices.push({ url: png, w: outW, h: outH, index: i });
       }
 
       // Restore original scroll position

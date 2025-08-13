@@ -35,6 +35,21 @@ import ShinyText from './ShinyText';
 import SilkBackground from './SilkBackground.jsx';
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
+// New system instruction for PCM problem solving and LaTeX formatting
+const PCM_SYSTEM_INSTRUCTION = `
+You are an expert in Physics, Chemistry, and Mathematics. When solving PCM problems, always provide your answer in a very neat and structured manner, using LaTeX formatting for all mathematical expressions, equations, and units. Your response MUST strictly adhere to the following sections:
+
+**1. Given Data:** List all known values with units.
+**2. Formulas:** State all relevant formulas USING LATEX FORMAT!!! important.
+**3. Step-by-Step Solution:** Provide a detailed, logical solution. Show all calculations and intermediate steps using LaTeX.
+**4. Conclusion:** State the final answer clearly with units.
+**5. New lines:** Separate different parts of your response with newlines for clarity and to make it look cleaner.
+**6. Add points:** Use bullet points (\* or -) to structure lists and explanations.
+- Point A
+- Point B
+All mathematical content, including variables, numbers, units, and equations, MUST be enclosed within LaTeX math delimiters (\\( \\) for inline math, \\[ \\] for display math). For example, write \`E = mc^2\` as \`\\(E = mc^2\\)\` or \`\\[E = mc^2\\]\`. Use \`\\text{}\` for regular text within math mode (e.g., \`\\(5 \\text{ kg}\\)\`). DO NOT use code blocks (e.g., \`\`\`latex\`) for LaTeX.',
+`;
+
 function App() {
   const [messages, setMessages] = useState([]);
   const [messageIdCounter, setMessageIdCounter] = useState(0);
@@ -57,10 +72,11 @@ function App() {
     Summarize: 'Summarize the provided context. If the context is straightforward, give a concise summary. If it’s complex, give a full, detailed summary covering all key points. Always ground information using Google Search for accuracy. For mathematical expressions, use markdown math syntax: $formula$ for inline math and $$formula$$ for display math.',
     Explain: 'Analyze the user’s question. If it only needs a direct answer, reply concisely. If it needs depth, give a thorough, structured explanation. Use Google Search to verify facts and fetch missing or specific information. For mathematical expressions, use markdown math syntax: $formula$ for inline math and $$formula$$ for display math.',
     Chat: 'Engage naturally with the user. Give short answers for simple questions and detailed responses when explanation is needed. If information is missing or specific, use Google Search to get it and ground your response. For mathematical expressions, use markdown math syntax: $formula$ for inline math and $$formula$$ for display math. Never use code blocks for LaTeX formulas.',
+    Tutor: PCM_SYSTEM_INSTRUCTION, // New Tutor mode using the PCM system instruction
   };
 
   // UI state: system prompt mode and drop-ups
-  // modes: "chat" | "explain" | "summarize"
+  // modes: "chat" | "explain" | "summarize" | "tutor"
   const [mode, setMode] = useState('chat');
   const systemInstruction = systemPrompts[mode];
   const [showModeMenu, setShowModeMenu] = useState(false);
@@ -349,11 +365,11 @@ useEffect(() => {
       setMessageIdCounter(prev => prev + 1);
       chrome.runtime.sendMessage({
         action: "sendChatMessage",
-        messages: updatedMessages,
+        messages: JSON.parse(JSON.stringify(updatedMessages)),
         systemInstruction,
         systemContext: includeCtx ? systemContext : null,
         model: selectedModel,
-        file: includeCtx ? new Blob([systemContext], { type: 'text/plain' }) : null
+        file: null
       });
       setInputValue('');
       setCapturedImage(null);
@@ -364,53 +380,59 @@ useEffect(() => {
       }
     };
 
-    // Only include page context for 'explain' and 'summarize' modes.
-    const shouldIncludeContext = mode === 'explain' || mode === 'summarize';
+    // Only include page context for 'explain', 'summarize', and 'Tutor' modes.
+    const shouldIncludeContext = mode === 'explain' || mode === 'summarize' || mode === 'Tutor';
 
     if (shouldIncludeContext) {
       // Always try to fetch context from the active tab if context is needed.
-      try {
-        chrome.runtime.sendMessage({ action: "getActiveTabCubAIContext" }, (resp) => {
-          if (chrome.runtime.lastError || !resp || !resp.ok) {
-            const errMsg = resp?.error || chrome.runtime.lastError?.message || "Failed to get page context";
-            if (mode === 'chat') {
-              console.warn(`[CubAI] Could not get page context for chat: ${errMsg}. Sending without it.`);
-              buildAndSend(false);
-            } else {
-              setError(errMsg);
-              setIsLoading(false);
+      // If we have context and a preview URL, and the pill has been rendered,
+      // we can assume the context is still valid and skip fetching it again.
+      if (systemContext && contextPreview?.url && hasContextPillBeenRendered) {
+        buildAndSend(true);
+      } else {
+        try {
+          chrome.runtime.sendMessage({ action: "getActiveTabCubAIContext" }, (resp) => {
+            if (chrome.runtime.lastError || !resp || !resp.ok) {
+              const errMsg = resp?.error || chrome.runtime.lastError?.message || "Failed to get page context";
+              if (mode === 'chat') {
+                console.warn(`[CubAI] Could not get page context for chat: ${errMsg}. Sending without it.`);
+                buildAndSend(false);
+              } else {
+                setError(errMsg);
+                setIsLoading(false);
+              }
+              return;
             }
-            return;
-          }
-          
-          const { context, tabMeta } = resp;
-          
-          // Check if the context URL has changed
-          const currentTabUrl = tabMeta?.url || '';
-          const previousContextUrl = contextPreview?.url || '';
 
-          if (currentTabUrl !== previousContextUrl) {
-            // New page context, reset pill status
-            setSystemContext(context || '');
-            updateContextPreview({ // This will set hasContextPillBeenRendered to false
-              title: tabMeta?.title || 'Untitled',
-              url: currentTabUrl,
-              origin: (() => { try { return new URL(currentTabUrl).origin; } catch { return currentTabUrl; } })(),
-              favIconUrl: tabMeta?.favIconUrl || '',
-              tabId: tabMeta?.id
-            });
-          } else {
-            // Same page context, just update systemContext if it changed (e.g., content updated)
-            setSystemContext(context || '');
-            // No need to call updateContextPreview, as it would reset hasContextPillBeenRendered unnecessarily.
-            // contextPreview remains the same, and hasContextPillBeenRendered retains its value.
-          }
+            const { context, tabMeta } = resp;
 
-          buildAndSend(true); // Send with context
-        });
-      } catch (e) {
-        setError(String(e?.message || e));
-        setIsLoading(false);
+            // Check if the context URL has changed
+            const currentTabUrl = tabMeta?.url || '';
+            const previousContextUrl = contextPreview?.url || '';
+
+            if (currentTabUrl !== previousContextUrl) {
+              // New page context, reset pill status
+              setSystemContext(context || '');
+              updateContextPreview({ // This will set hasContextPillBeenRendered to false
+                title: tabMeta?.title || 'Untitled',
+                url: currentTabUrl,
+                origin: (() => { try { return new URL(currentTabUrl).origin; } catch { return currentTabUrl; } })(),
+                favIconUrl: tabMeta?.favIconUrl || '',
+                tabId: tabMeta?.id
+              });
+            } else {
+              // Same page context, just update systemContext if it changed (e.g., content updated)
+              setSystemContext(context || '');
+              // No need to call updateContextPreview, as it would reset hasContextPillBeenRendered unnecessarily.
+              // contextPreview remains the same, and hasContextPillBeenRendered retains its value.
+            }
+
+            buildAndSend(true); // Send with context
+          });
+        } catch (e) {
+          setError(String(e?.message || e));
+          setIsLoading(false);
+        }
       }
     } else {
       // This path is for subsequent messages in 'chat' mode without context.
@@ -461,8 +483,8 @@ useEffect(() => {
       setError('');
       setCapturedImage(null);
       setCapturedSlices([]);
-      dbg('Sending chrome.runtime.sendMessage', { action: 'captureFullPage', quality: 0.6, maxWidth: 1024 });
-      chrome.runtime.sendMessage({ action: 'captureFullPage', quality: 0.6, maxWidth: 1024 }, (resp) => {
+      dbg('Sending chrome.runtime.sendMessage', { action: 'captureFullPage' });
+      chrome.runtime.sendMessage({ action: 'captureFullPage' }, (resp) => {
         // Guard undefined callback param
         if (typeof resp === 'undefined') {
           const lastErr = chrome?.runtime?.lastError?.message;
@@ -1154,6 +1176,18 @@ useEffect(() => {
                       >
                         <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='chat' ? '#43cea2' : '#6b7280' }} />
                         Chat (no context)
+                      </button>
+                      <button
+                        className="menu-item"
+                        onClick={() => selectMode('Tutor')}
+                        style={{
+                          display: 'flex', width: '100%', alignItems: 'center', gap: 8,
+                          background: 'transparent', color: '#e5e7eb', border: 'none',
+                          padding: '8px 10px', borderRadius: 8, cursor: 'pointer'
+                        }}
+                      >
+                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='Tutor' ? '#43cea2' : '#6b7280' }} />
+                        Tutor (PCM problems)
                       </button>
                     </div>
                   )}
