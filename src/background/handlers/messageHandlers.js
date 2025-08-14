@@ -1,6 +1,6 @@
 // Message handlers for runtime messages
 
-import { callGeminiTool, streamGeminiResponse, callGeminiUserMemoryTool, about_user_read, about_user_write } from '../api/gemini.js';
+import { callGeminiTool, callGeminiUserMemoryTool, about_user_read, about_user_write, run } from '../api/gemini.js';
 import { defaultGenerationConfig } from '../config/index.js';
 import { getSummarizeState } from './contextMenus.js';
 import { readUserMemory } from '../utils/userMemory.js';
@@ -26,6 +26,27 @@ export function setupMessageHandlers() {
     
     if (action === "captureFullPage") {
       return handleCaptureFullPage(message, sender, sendResponse);
+    }
+    
+    if (action === 'generate-image') {
+      const { prompt, originalPrompt } = message;
+      run(prompt)
+        .then(response => {
+          if (response && response.imageData) {
+            chrome.runtime.sendMessage({
+              action: 'displayGeneratedImage',
+              description: response.description,
+              imageData: response.imageData,
+              imagePrompt: response.imagePrompt,
+            });
+          } else {
+            chrome.runtime.sendMessage({ action: "fullAIMessage", text: response });
+          }
+        })
+        .catch(error => {
+          chrome.runtime.sendMessage({ action: "displayError", error: error.message || "Failed to generate image." });
+        });
+      return true;
     }
     
     if (action === "listTabs") {
@@ -221,7 +242,7 @@ async function handleSendChatMessage(message, sender, sendResponse) {
     // First Call (for General Response and Grounding)
     // Get the selected model from the message or default to gemini-2.5-flash
     const modelName = message.model || "gemini-2.5-flash";
-    const assistantResponse = await streamGeminiResponse(finalContents, defaultGenerationConfig, systemInstruction, modelName);
+    const assistantResponse = await run(finalContents, defaultGenerationConfig, systemInstruction, modelName);
 
     // Second Call (for User Memory) - After the response is complete
     console.log("Using gemini-1.5-flash for user memory processing after response completion.");

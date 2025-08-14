@@ -78,6 +78,7 @@ function App() {
   // UI state: system prompt mode and drop-ups
   // modes: "chat" | "explain" | "summarize" | "tutor"
   const [mode, setMode] = useState('chat');
+  const [generationMode, setGenerationMode] = useState('chat'); // 'chat' or 'image'
   const systemInstruction = systemPrompts[mode];
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [showTabsMenu, setShowTabsMenu] = useState(false);
@@ -142,24 +143,39 @@ useEffect(() => {
         } else if (message.action === "startAIStream") {
           setIsLoading(true);
           isStreamingRef.current = true;
-          setMessageIdCounter(prevCounter => {
-            setMessages(prev => [...prev, { id: prevCounter, role: 'ai', content: [{ type: 'text', text: '' }] }]);
-            return prevCounter + 1;
-          });
         } else if (message.action === "appendAIMessageChunk") {
           const textChunk = message.text || '';
           if (!textChunk) return;
-          setMessages(prev => {
-            const newMessages = [...prev];
-            const lastIdx = newMessages.length - 1;
-            if (lastIdx >= 0 && newMessages[lastIdx].role === 'ai' && isStreamingRef.current) {
-              const updated = {
-                ...newMessages[lastIdx],
-                content: [{ ...newMessages[lastIdx].content[0], text: (newMessages[lastIdx].content[0]?.text || '') + textChunk }]
+          setMessages(prevMessages => {
+            const lastMessage = prevMessages.length > 0 ? prevMessages[prevMessages.length - 1] : null;
+
+            if (lastMessage && lastMessage.role === 'ai' && isStreamingRef.current) {
+              // Append to the existing AI message
+              const updatedMessages = [...prevMessages];
+              const updatedLastMessage = { ...lastMessage };
+              const content = Array.isArray(updatedLastMessage.content) ? [...updatedLastMessage.content] : [];
+              let textContentIndex = content.findIndex(c => c.type === 'text');
+
+              if (textContentIndex !== -1) {
+                content[textContentIndex].text += textChunk;
+              } else {
+                content.push({ type: 'text', text: textChunk });
+              }
+              
+              updatedLastMessage.content = content;
+              updatedMessages[prevMessages.length - 1] = updatedLastMessage;
+              return updatedMessages;
+            } else if (isStreamingRef.current) {
+              // First chunk: create a new AI message
+              const newAiMessage = {
+                id: messageIdCounter,
+                role: 'ai',
+                content: [{ type: 'text', text: textChunk }],
               };
-              newMessages[lastIdx] = updated;
+              setMessageIdCounter(c => c + 1);
+              return [...prevMessages, newAiMessage];
             }
-            return newMessages;
+            return prevMessages;
           });
         } else if (message.action === "endAIStream") {
           isStreamingRef.current = false;
@@ -180,12 +196,35 @@ useEffect(() => {
         } else if (message.action === "displayError") {
           setError(message.error);
           setIsLoading(false);
+        } else if (message.action === 'displayGeneratedImage') {
+          const { description, imageData, imagePrompt } = message;
+          setMessages(prev => {
+            const content = [];
+            if (description) {
+              content.push({ type: 'text', text: description });
+            }
+            if (imageData) {
+              content.push({ type: 'image', url: imageData });
+            }
+            if (imagePrompt) {
+              content.push({ type: 'image_prompt', text: imagePrompt });
+            }
+            const newAiMessage = {
+              id: messageIdCounter,
+              role: 'ai',
+              content: content,
+            };
+            setMessageIdCounter(p => p + 1);
+            const newMessages = [...prev, newAiMessage];
+            return newMessages;
+          });
+          setIsLoading(false);
         }
       };
       chrome.runtime.onMessage.addListener(listener);
       return () => chrome.runtime.onMessage.removeListener(listener);
     }
-  }, []);
+  }, [messageIdCounter]);
 
   const clearChat = () => {
     setMessages([]);
@@ -326,69 +365,127 @@ useEffect(() => {
 
   // Restore send flow with curved input, honoring current mode
   const handleSend = () => {
-    if (!inputValue.trim() && !capturedImage && (!capturedSlices || capturedSlices.length === 0)) return;
-    setIsLoading(true);
-    const buildAndSend = (includeCtx) => {
-     const finalUserInput = inputValue;
+    if (generationMode === 'image') {
+      if (!inputValue.trim()) return;
 
-      const content = [];
-      if (capturedImage) {
-        content.push({ type: 'image', url: capturedImage });
-        if (captureMeta?.w && captureMeta?.h) {
-          content.push({ type: 'text', text: `//image-size: ${captureMeta.w}x${captureMeta.h}` });
-        }
-      }
-      if (capturedSlices && capturedSlices.length > 0) {
-        // Attach each slice as an image part
-        capturedSlices
-          .slice() // copy
-          .sort((a,b) => a.index - b.index)
-          .forEach(s => content.push({ type: 'image', url: s.url }));
-        const totalKB = Math.round(capturedSlices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
-        content.push({ type: 'text', text: `//image-slices: ${capturedSlices.length} • ~${totalKB} KB` });
-      }
-      if (finalUserInput.trim()) content.push({ type: 'text', text: finalUserInput });
+      const getFormattedImageContext = (history, newUserPrompt) => {
+        let contextString = `<system prompt>\nYou are an expert image generator. Follow the user's instructions carefully.\n`;
 
-      // Do NOT inject any “Attached page context: …” text. The composer pill indicates attached context,
-      // and the model receives systemContext separately.
+        history.forEach(message => {
+          if (message.role === 'user') {
+            const userText = message.content.find(c => c.type === 'text')?.text || '';
+            if (userText) {
+              const cleanText = userText.replace(/^Generate an image of: /, '');
+              contextString += `<usermessage>: ${cleanText}\n`;
+            }
+          } else if (message.role === 'ai') {
+            const aiDescription = message.content.find(c => c.type === 'text')?.text;
+            const imagePrompt = message.content.find(c => c.type === 'image_prompt')?.text;
 
-      // If we have context and a preview URL, append a hidden context-url token as a separate part
-      // ONLY if it's the first time we're rendering the pill for this context.
-      if (includeCtx && contextPreview?.url && !hasContextPillBeenRendered) {
-        content.push({ type: 'text', text: `//context-url: ${contextPreview.url}` });
-        setHasContextPillBeenRendered(true); // Mark as rendered
-      }
+            if (aiDescription) {
+              contextString += `<ai message>: ${aiDescription}\n`;
+            }
+            if (imagePrompt) {
+              contextString += `\`\`\`${imagePrompt}\`\`\`\n`;
+            }
+          }
+        });
 
-      const newUserMessage = { id: messageIdCounter, role: 'user', content, contexts: contexts };
-      const updatedMessages = [...messages, newUserMessage];
-      setMessages(updatedMessages);
+        contextString += `<usermessage>: ${newUserPrompt}\n`;
+        return contextString;
+      };
+
+      const imageContext = getFormattedImageContext(messages, inputValue);
+      
+      const isFirstImage = !messages.some(m => m.role === 'ai' && m.content.some(c => c.type === 'image' || c.type === 'image_prompt'));
+
+      const newUserMessage = {
+        id: messageIdCounter,
+        role: 'user',
+        content: [{ type: 'text', text: isFirstImage ? `${inputValue}` : inputValue }]
+      };
+      
+      setMessages(prev => [...prev, newUserMessage]);
       setMessageIdCounter(prev => prev + 1);
+      setIsLoading(true);
+      
+      chrome.runtime.sendMessage({
+        action: 'generate-image',
+        prompt: imageContext,
+        originalPrompt: inputValue,
+      });
+      
+      setInputValue('');
+      return;
+    }
+
+    if (!inputValue.trim() && !capturedImage && (!capturedSlices || capturedSlices.length === 0)) return;
+
+    const finalUserInput = inputValue;
+    const content = [];
+    if (capturedImage) {
+      content.push({ type: 'image', url: capturedImage });
+      if (captureMeta?.w && captureMeta?.h) {
+        content.push({ type: 'text', text: `//image-size: ${captureMeta.w}x${captureMeta.h}` });
+      }
+    }
+    if (capturedSlices && capturedSlices.length > 0) {
+      capturedSlices
+        .slice()
+        .sort((a, b) => a.index - b.index)
+        .forEach(s => content.push({ type: 'image', url: s.url }));
+      const totalKB = Math.round(capturedSlices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
+      content.push({ type: 'text', text: `//image-slices: ${capturedSlices.length} • ~${totalKB} KB` });
+    }
+    if (finalUserInput.trim()) content.push({ type: 'text', text: finalUserInput });
+
+    const newUserMessage = { id: messageIdCounter, role: 'user', content, contexts: contexts };
+
+    // For text-based chat, immediately add a placeholder for the AI response
+    // to allow streaming into a pre-existing container. For image generation,
+    // the response is handled separately to avoid showing an empty box.
+    const newAiMessage = {
+      id: messageIdCounter + 1,
+      role: 'ai',
+      content: [{ type: 'text', text: '' }],
+    };
+
+    setMessages(prev => [...prev, newUserMessage, newAiMessage]);
+    setMessageIdCounter(prev => prev + 2);
+    setIsLoading(true);
+
+    setInputValue('');
+    setCapturedImage(null);
+    setCapturedSlices([]);
+    if (contexts.length > 0) {
+      setContexts([]);
+      chrome.storage.local.set({ cubext: [] });
+    }
+
+    const performSend = (includeCtx, systemCtxForSend) => {
+      const finalUserMessage = { ...newUserMessage, content: [...newUserMessage.content] };
+      if (includeCtx && contextPreview?.url && !hasContextPillBeenRendered) {
+        finalUserMessage.content.push({ type: 'text', text: `//context-url: ${contextPreview.url}` });
+        setHasContextPillBeenRendered(true);
+      }
+
+      const finalMessages = [...messages, finalUserMessage];
+
       chrome.runtime.sendMessage({
         action: "sendChatMessage",
-        messages: JSON.parse(JSON.stringify(updatedMessages)),
+        messages: JSON.parse(JSON.stringify(finalMessages)),
         systemInstruction,
-        systemContext: includeCtx ? systemContext : null,
+        systemContext: includeCtx ? systemCtxForSend : null,
         model: selectedModel,
         file: null
       });
-      setInputValue('');
-      setCapturedImage(null);
-      setCapturedSlices([]);
-      if (contexts.length > 0) {
-        setContexts([]);
-        chrome.storage.local.set({ cubext: [] });
-      }
     };
 
-    // Only include page context for 'explain', 'summarize', and 'Tutor' modes.
     const shouldIncludeContext = mode === 'explain' || mode === 'summarize' || mode === 'Tutor';
 
     if (shouldIncludeContext) {
-      // Always try to fetch context from the active tab if context is needed.
-      // If we have context and a preview URL, and the pill has been rendered,
-      // we can assume the context is still valid and skip fetching it again.
       if (systemContext && contextPreview?.url && hasContextPillBeenRendered) {
-        buildAndSend(true);
+        performSend(true, systemContext);
       } else {
         try {
           chrome.runtime.sendMessage({ action: "getActiveTabCubAIContext" }, (resp) => {
@@ -396,7 +493,7 @@ useEffect(() => {
               const errMsg = resp?.error || chrome.runtime.lastError?.message || "Failed to get page context";
               if (mode === 'chat') {
                 console.warn(`[CubAI] Could not get page context for chat: ${errMsg}. Sending without it.`);
-                buildAndSend(false);
+                performSend(false, null);
               } else {
                 setError(errMsg);
                 setIsLoading(false);
@@ -405,15 +502,12 @@ useEffect(() => {
             }
 
             const { context, tabMeta } = resp;
-
-            // Check if the context URL has changed
             const currentTabUrl = tabMeta?.url || '';
             const previousContextUrl = contextPreview?.url || '';
 
             if (currentTabUrl !== previousContextUrl) {
-              // New page context, reset pill status
               setSystemContext(context || '');
-              updateContextPreview({ // This will set hasContextPillBeenRendered to false
+              updateContextPreview({
                 title: tabMeta?.title || 'Untitled',
                 url: currentTabUrl,
                 origin: (() => { try { return new URL(currentTabUrl).origin; } catch { return currentTabUrl; } })(),
@@ -421,13 +515,9 @@ useEffect(() => {
                 tabId: tabMeta?.id
               });
             } else {
-              // Same page context, just update systemContext if it changed (e.g., content updated)
               setSystemContext(context || '');
-              // No need to call updateContextPreview, as it would reset hasContextPillBeenRendered unnecessarily.
-              // contextPreview remains the same, and hasContextPillBeenRendered retains its value.
             }
-
-            buildAndSend(true); // Send with context
+            performSend(true, context || '');
           });
         } catch (e) {
           setError(String(e?.message || e));
@@ -435,8 +525,7 @@ useEffect(() => {
         }
       }
     } else {
-      // This path is for subsequent messages in 'chat' mode without context.
-      buildAndSend(false);
+      performSend(false, null);
     }
   };
   const handleInputChange = (e) => {
@@ -524,6 +613,10 @@ useEffect(() => {
       dbg('Exception thrown', e);
       setError(String(e?.message || e));
     }
+  };
+
+  const toggleGenerationMode = () => {
+    setGenerationMode(prev => prev === 'chat' ? 'image' : 'chat');
   };
  
   return (
@@ -633,283 +726,407 @@ useEffect(() => {
               </div>
             ) : null;
           })()}
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`message ${msg.role}-message`}
-              style={{ border: '1px solid #3E3F29', background: 'rgba(255,255,255,0.55)', color: '#1b1b1b' }}
-            >
-              {msg.contexts && msg.contexts.length > 0 && (
-                <div className="context-pills-container" style={{ marginBottom: '10px' }}>
-                  {msg.contexts.map((context, index) => (
-                    <div key={index} className="context-pill" style={{ padding: '8px 12px', marginBottom: '5px', borderRadius: '8px', background: 'rgba(0,0,0,0.1)', border: '1px solid #7D8D86', color: '#1b1b1b', fontSize: '14px' }}>
-                      <p style={{ margin: '0', fontStyle: 'italic' }}>{context}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {msg.content.map((part, i) => {
-                const key = `${msg.id}-${i}`;
+          {messages.map((msg) => {
+            const textParts = msg.content.filter(p => p.type === 'text');
+            const imageParts = msg.content.filter(p => p.type === 'image');
+            const hasImage = imageParts.length > 0;
+            const hasText = textParts.length > 0;
 
-                // URL preview injection: if a text part contains a URL, render a compact preview card under the text.
-                if (part.type === 'text') {
-                  const raw = part.text || '';
+            if (!hasText && !hasImage) {
+              return null;
+            }
 
-                  // Special hidden token produced by background or buildAndSend to show a pill in-bubble without showing raw text
-                  const hiddenTokenMatch = raw.match(/^\/\/context-url:\s*(https?:\/\/[^\s)]+)\s*$/i);
-                  if (hiddenTokenMatch) {
-                    const url = hiddenTokenMatch[1];
-                    let hostname = '';
-                    let origin = '';
-                    try {
-                      const u = new URL(url);
-                      hostname = u.hostname;
-                      origin = u.origin;
-                    } catch {
-                      hostname = url.replace(/^https?:\/\//i, '');
-                      origin = null;
-                    }
-                    const favicon = origin ? `${origin}/favicon.ico` : '';
-                    const title = hostname ? hostname : (url.length > 60 ? url.slice(0, 57) + '…' : url);
+            const isAiImageMsg = msg.role === 'ai' && hasImage;
 
-                    return (
-                      <a
-                        key={key + '-card'}
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                          marginTop: 8,
-                          padding: 10,
-                          borderRadius: 12,
-                          background: '#111317',
-                          color: '#e8e8e8',
-                          textDecoration: 'none',
-                          border: '1px solid #22252b',
-                        }}
-                      >
-                        <div
+            if (isAiImageMsg) {
+              return (
+                <React.Fragment key={msg.id}>
+                  <div
+                    className="message ai-message"
+                    style={{
+                      padding: '12px',
+                      background: 'rgba(255, 255, 255, 0.6)',
+                      border: '1px solid #3E3F29',
+                      borderRadius: '12px',
+                      color: '#1b1b1b'
+                    }}
+                  >
+                    <div
+                      className="image-container"
+                      style={{
+                        borderRadius: '8px',
+                        overflow: 'hidden',
+                        border: '1px solid #9E876D'
+                      }}
+                    >
+                      {imageParts.map((part, i) => (
+                        <img
+                          key={`${msg.id}-img-${i}`}
+                          src={part.url}
+                          alt="Content"
                           style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: '50%',
-                            overflow: 'hidden',
-                            background: '#23262d',
+                            width: '100%',
+                            height: 'auto',
+                            display: 'block',
+                            maxWidth: 'none',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  {hasText && (
+                    <div
+                      key={`${msg.id}-text`}
+                      className="message ai-message"
+                      style={{
+                        border: '1px solid #3E3F29',
+                        background: 'rgba(255,255,255,0.55)',
+                        color: '#1b1b1b'
+                      }}
+                    >
+                      {textParts.map((part, i) => {
+                        const key = `${msg.id}-${i}`;
+                        const text = part.text || '';
+                        return (
+                          <ReactMarkdown
+                            key={key + '-md'}
+                            remarkPlugins={remarkPlugins}
+                            rehypePlugins={rehypePlugins}
+                            components={{
+                              table: ({node, ...props}) => (
+                                <table style={{
+                                  borderCollapse: 'collapse',
+                                  width: '100%',
+                                  margin: '12px 0',
+                                  backgroundColor: 'rgb(107 79 59)',
+                                  borderRadius: '8px',
+                                  overflow: 'hidden'
+                                }} {...props} />
+                              ),
+                              th: ({node, ...props}) => (
+                                <th style={{
+                                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                                  padding: '8px 12px',
+                                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                                  fontWeight: 600,
+                                  color: '#f0f0f0'
+                                }} {...props} />
+                              ),
+                              td: ({node, ...props}) => (
+                                <td style={{
+                                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                                  padding: '8px 12px',
+                                  color: '#e0e0e0'
+                                }} {...props} />
+                              )
+                            }}
+                          >
+                            {convertLatexCodeBlocks(text)}
+                          </ReactMarkdown>
+                        );
+                      })}
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            }
+
+            return (
+              <div
+                key={msg.id}
+                className={`message ${msg.role}-message`}
+                style={{
+                  border: '1px solid #3E3F29',
+                  background: 'rgba(255,255,255,0.55)',
+                  color: '#1b1b1b'
+                }}
+              >
+                {/* Render image(s) first if they exist */}
+                {hasImage && (
+                  <div
+                    className="image-container"
+                    style={{
+                      marginBottom: hasText ? '12px' : '0',
+                      borderRadius: '8px',
+                      overflow: 'hidden',
+                      border: 'none'
+                    }}
+                  >
+                    {imageParts.map((part, i) => (
+                      <img
+                        key={`${msg.id}-img-${i}`}
+                        src={part.url}
+                        alt="Content"
+                        style={{
+                          width: '100%',
+                          height: 'auto',
+                          display: 'block',
+                          maxWidth: '100%', // Keep user images constrained
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Render text content if it exists, using the original logic */}
+                {hasText && (
+                  <>
+                    {msg.contexts && msg.contexts.length > 0 && (
+                      <div className="context-pills-container" style={{ marginBottom: '10px' }}>
+                        {msg.contexts.map((context, index) => (
+                          <div key={index} className="context-pill" style={{ padding: '8px 12px', marginBottom: '5px', borderRadius: '8px', background: 'rgba(0,0,0,0.1)', border: '1px solid #7D8D86', color: '#1b1b1b', fontSize: '14px' }}>
+                            <p style={{ margin: '0', fontStyle: 'italic' }}>{context}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {textParts.map((part, i) => {
+                      const key = `${msg.id}-${i}`;
+                      const raw = part.text || '';
+                      const hiddenTokenMatch = raw.match(/^\/\/context-url:\s*(https?:\/\/[^\s)]+)\s*$/i);
+                      if (hiddenTokenMatch) {
+                        const url = hiddenTokenMatch[1];
+                        let hostname = '';
+                        let origin = '';
+                        try {
+                          const u = new URL(url);
+                          hostname = u.hostname;
+                          origin = u.origin;
+                        } catch {
+                          hostname = url.replace(/^https?:\/\//i, '');
+                          origin = null;
+                        }
+                        const favicon = origin ? `${origin}/favicon.ico` : '';
+                        const title = hostname ? hostname : (url.length > 60 ? url.slice(0, 57) + '…' : url);
+
+                        return (
+                          <a
+                            key={key + '-card'}
+                            href={url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                              marginTop: 8,
+                              padding: 10,
+                              borderRadius: 12,
+                              background: '#111317',
+                              color: '#e8e8e8',
+                              textDecoration: 'none',
+                              border: '1px solid #22252b',
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: 28,
+                                height: 28,
+                                borderRadius: '50%',
+                                overflow: 'hidden',
+                                background: '#23262d',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flex: '0 0 auto',
+                              }}
+                            >
+                              {favicon ? (
+                                <img
+                                  src={favicon}
+                                  alt=""
+                                  width="20"
+                                  height="20"
+                                  style={{ display: 'block' }}
+                                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                />
+                              ) : (
+                                <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#444' }} />
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                              <div
+                                style={{
+                                  fontWeight: 700,
+                                  color: '#f1f5f9',
+                                  lineHeight: 1.2,
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  maxWidth: '100%',
+                                }}
+                                title={title}
+                              >
+                                {title}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: 12,
+                                  color: '#a1a1aa',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  marginTop: 2,
+                                  maxWidth: '100%',
+                                }}
+                                title={hostname || url}
+                              >
+                                {hostname || url}
+                              </div>
+                            </div>
+                          </a>
+                        );
+                      }
+
+                      const text = raw;
+                      const urlMatch = text.match(/https?:\/\/[^\s)]+/i);
+                      const url = urlMatch ? urlMatch[0] : null;
+
+                      const textNode = (
+                        <ReactMarkdown
+                          key={key + '-md'}
+                          remarkPlugins={remarkPlugins}
+                          rehypePlugins={rehypePlugins}
+                          components={{
+                            table: ({node, ...props}) => (
+                              <table style={{
+                                borderCollapse: 'collapse',
+                                width: '100%',
+                                margin: '12px 0',
+                                backgroundColor: 'rgb(107 79 59)',
+                                borderRadius: '8px',
+                                overflow: 'hidden'
+                              }} {...props} />
+                            ),
+                            th: ({node, ...props}) => (
+                              <th style={{
+                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                padding: '8px 12px',
+                                backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                                fontWeight: 600,
+                                color: '#f0f0f0'
+                              }} {...props} />
+                            ),
+                            td: ({node, ...props}) => (
+                              <td style={{
+                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                padding: '8px 12px',
+                                color: '#e0e0e0'
+                              }} {...props} />
+                            )
+                          }}
+                        >
+                          {convertLatexCodeBlocks(text)}
+                        </ReactMarkdown>
+                      );
+
+                      if (!url) {
+                        return textNode;
+                      }
+
+                      let hostname = '';
+                      let origin = '';
+                      try {
+                        const u = new URL(url);
+                        hostname = u.hostname;
+                        origin = u.origin;
+                      } catch {
+                        hostname = url.replace(/^https?:\/\//i, '');
+                        origin = null;
+                      }
+                      const favicon = origin ? `${origin}/favicon.ico` : '';
+                      const title = hostname ? hostname : (url.length > 60 ? url.slice(0, 57) + '…' : url);
+
+                      const card = (
+                        <a
+                          key={key + '-card'}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
                             display: 'flex',
                             alignItems: 'center',
-                            justifyContent: 'center',
-                            flex: '0 0 auto',
+                            gap: 10,
+                            marginTop: 8,
+                            padding: 10,
+                            borderRadius: 12,
+                            background: '#111317',
+                            color: '#e8e8e8',
+                            textDecoration: 'none',
+                            border: '1px solid #22252b',
                           }}
                         >
-                          {favicon ? (
-                            <img
-                              src={favicon}
-                              alt=""
-                              width="20"
-                              height="20"
-                              style={{ display: 'block' }}
-                              onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                            />
-                          ) : (
-                            <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#444' }} />
-                          )}
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                           <div
                             style={{
-                              fontWeight: 700,
-                              color: '#f1f5f9',
-                              lineHeight: 1.2,
-                              whiteSpace: 'nowrap',
+                              width: 28,
+                              height: 28,
+                              borderRadius: '50%',
                               overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              maxWidth: '100%',
+                              background: '#23262d',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flex: '0 0 auto',
                             }}
-                            title={title}
                           >
-                            {title}
+                            {favicon ? (
+                              <img
+                                src={favicon}
+                                alt=""
+                                width="20"
+                                height="20"
+                                style={{ display: 'block' }}
+                                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                              />
+                            ) : (
+                              <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#444' }} />
+                            )}
                           </div>
-                          <div
-                            style={{
-                              fontSize: 12,
-                              color: '#a1a1aa',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              marginTop: 2,
-                              maxWidth: '100%',
-                            }}
-                            title={hostname || url}
-                          >
-                            {hostname || url}
+                          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontWeight: 700,
+                                color: '#f1f5f9',
+                                lineHeight: 1.2,
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                maxWidth: '100%',
+                              }}
+                              title={title}
+                            >
+                              {title}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 12,
+                                color: '#a1a1aa',
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                marginTop: 2,
+                                maxWidth: '100%',
+                              }}
+                              title={hostname || url}
+                            >
+                              {hostname || url}
+                            </div>
                           </div>
+                        </a>
+                      );
+
+                      return (
+                        <div key={key} style={{ display: 'flex', flexDirection: 'column' }}>
+                          {textNode}
+                          {card}
                         </div>
-                      </a>
-                    );
-                  }
-
-                  // Fallback: normal text path with implicit URL detection
-                  const text = raw;
-                  const urlMatch = text.match(/https?:\/\/[^\s)]+/i);
-                  const url = urlMatch ? urlMatch[0] : null;
-
-                  // Render text first
-                  const textNode = (
-                    <ReactMarkdown
-                      key={key + '-md'}
-                      remarkPlugins={remarkPlugins}
-                      rehypePlugins={rehypePlugins}
-                      components={{
-                        table: ({node, ...props}) => (
-                          <table style={{
-                            borderCollapse: 'collapse',
-                            width: '100%',
-                            margin: '12px 0',
-                            backgroundColor: 'rgb(107 79 59)',
-                            borderRadius: '8px',
-                            overflow: 'hidden'
-                          }} {...props} />
-                        ),
-                        th: ({node, ...props}) => (
-                          <th style={{
-                            border: '1px solid rgba(255, 255, 255, 0.15)',
-                            padding: '8px 12px',
-                            backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                            fontWeight: 600,
-                            color: '#f0f0f0'
-                          }} {...props} />
-                        ),
-                        td: ({node, ...props}) => (
-                          <td style={{
-                            border: '1px solid rgba(255, 255, 255, 0.15)',
-                            padding: '8px 12px',
-                            color: '#e0e0e0'
-                          }} {...props} />
-                        )
-                      }}
-                    >
-                      {convertLatexCodeBlocks(text)}
-                    </ReactMarkdown>
-                  );
-
-                  if (!url) {
-                    return textNode;
-                  }
-
-                  // Build preview meta using only safe, CORS-free data available (hostname, path, favicon).
-                  let hostname = '';
-                  let origin = '';
-                  try {
-                    const u = new URL(url);
-                    hostname = u.hostname;
-                    origin = u.origin;
-                  } catch {
-                    hostname = url.replace(/^https?:\/\//i, '');
-                    origin = null;
-                  }
-
-                  // Try to use site's favicon; fallback to empty (browser will handle 404 silently).
-                  const favicon = origin ? `${origin}/favicon.ico` : '';
-
-                  // Optional title extraction hint: if message systemContext already contained the page title line,
-                  // we could parse it here. For now, show the URL as title if no better title exists.
-                  // Keep the card minimal to avoid network fetches in UI.
-                  const title = hostname ? hostname : (url.length > 60 ? url.slice(0, 57) + '…' : url);
-
-                  const card =
-                    <a
-                      key={key + '-card'}
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        marginTop: 8,
-                        padding: 10,
-                        borderRadius: 12,
-                        background: '#111317',
-                        color: '#e8e8e8',
-                        textDecoration: 'none',
-                        border: '1px solid #22252b',
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: 28,
-                          height: 28,
-                          borderRadius: '50%',
-                          overflow: 'hidden',
-                          background: '#23262d',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          flex: '0 0 auto',
-                        }}
-                      >
-                        {/* favicon preview */}
-                        {favicon ? (
-                          <img
-                            src={favicon}
-                            alt=""
-                            width="20"
-                            height="20"
-                            style={{ display: 'block' }}
-                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                          />
-                        ) : (
-                          <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#444' }} />
-                        )}
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                        <div
-                          style={{
-                            fontWeight: 700,
-                            color: '#f1f5f9',
-                            lineHeight: 1.2,
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            maxWidth: '100%',
-                          }}
-                          title={title}
-                        >
-                          {title}
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 12,
-                            color: '#a1a1aa',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            marginTop: 2,
-                            maxWidth: '100%',
-                          }}
-                          title={hostname || url}
-                        >
-                          {hostname || url}
-                        </div>
-                      </div>
-                    </a>;
-
-                  return (
-                    <div key={key} style={{ display: 'flex', flexDirection: 'column' }}>
-                      {textNode}
-                      {card}
-                    </div>
-                  );
-                } else if (part.type === 'image') {
-                  return <img key={key} src={part.url} alt="Captured content" style={{ maxWidth: '100%' }} />;
-                }
-                return null;
-              })}
-            </div>
-          ))}
+                      );
+                    })}
+                  </>
+                )}
+              </div>
+            );
+          })}
           {isLoading && <div className="loading-message">Loading...</div>}
           {error && <div className="message error-message">{error}</div>}
         </div>
@@ -1081,7 +1298,7 @@ useEffect(() => {
             {/* Top row: placeholder-like input */}
             <textarea
               className="chatlike-input"
-              placeholder={mode === 'chat' ? 'Chat with CubAI…' : 'Ask with page context…'}
+              placeholder={generationMode === 'image' ? 'Describe an image to generate...' : (mode === 'chat' ? 'Chat with CubAI…' : 'Ask with page context…')}
               value={inputValue}
               onChange={handleInputChange}
               onKeyDown={handleKeyPress}
@@ -1310,6 +1527,27 @@ useEffect(() => {
                     </button>
                   </div>
 
+                  {/* Image Generation Icon */}
+                  <div style={{ position: 'relative' }}>
+                    <button
+                      className="icon-button"
+                      onClick={toggleGenerationMode}
+                      disabled={isLoading}
+                      aria-label="Toggle Image Generation Mode"
+                      title="Toggle Image Generation Mode"
+                      style={{
+                        width: 30, height: 30, display: 'grid', placeItems: 'center',
+                        borderRadius: 8,
+                        background: generationMode === 'image' ? 'rgba(168, 85, 247, 0.2)' : 'transparent',
+                        border: '1px solid',
+                        borderColor: generationMode === 'image' ? '#A855F7' : 'rgba(255,255,255,0.2)',
+                        transition: 'background-color 0.2s, border-color 0.2s',
+                      }}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3E3F29" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-image"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                    </button>
+                  </div>
+ 
                   {/* Model selector (drop-up) */}
                   <div style={{ position: 'relative' }} data-trigger="model">
                     <button

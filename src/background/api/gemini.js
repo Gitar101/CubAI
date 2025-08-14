@@ -1,62 +1,86 @@
 // Gemini API integration
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { GEMINI_API_KEY, groundingTool } from '../config/index.js';
+import { GEMINI_API_KEY } from '../config/index.js';
 import { readUserMemory, writeUserMemory } from '../utils/userMemory.js';
+import { generateImage } from './chutes.js';
 
 // Configure the client
 export const ai = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-// Helper to stream Gemini responses
-export async function streamGeminiResponse(contents, generationConfig, systemInstruction, modelName = "gemini-2.5-flash") {
+// Define the image generation tool
+const image_generation = {
+  functionDeclarations: [{
+    name: "image_generation",
+    description: "Generates an image based on a prompt and an optional negative prompt.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: {
+          type: "string",
+          description: "The prompt to generate the image from."
+        },
+        negative_prompt: {
+          type: "string",
+          description: "Optional. The negative prompt to steer the image generation."
+        },
+        description: {
+          type: "string",
+          description: "A description of the image to be generated, which will be displayed in the chat."
+        }
+      },
+      required: ["prompt", "description"]
+    }
+  }]
+};
+
+// Main function to run the generative model
+export async function run(contents, generationConfig, systemInstruction) {
+  // Gemini API expects contents to be an array of objects, not a plain string.
+  if (typeof contents === 'string') {
+    contents = [{ parts: [{ text: contents }] }];
+  }
+
   if (!GEMINI_API_KEY) {
     chrome.runtime.sendMessage({ action: "displayError", error: "Missing VITE_GEMINI_API_KEY in background. Add it to .env and rebuild." });
     return null;
   }
 
-  const model = ai.getGenerativeModel({ model: modelName });
+  const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-  const tools = [groundingTool]; // Include Google grounding tool
+  const tools = [image_generation];
 
   const request = { contents, tools, generationConfig };
   if (systemInstruction) {
     request.systemInstruction = { role: 'system', parts: [{ text: systemInstruction }] };
   }
 
-  if (request.file) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = reader.result.split(',');
-      request.contents.push({
-        role: 'user',
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'text/plain',
-              data: base64
-            }
-          }
-        ]
-      });
-    };
-    reader.readAsDataURL(request.file);
-  }
-
-  let fullResponse = "";
-
   try {
     chrome.runtime.sendMessage({ action: "startAIStream" });
-    const result = await model.generateContentStream(request);
-    for await (const chunk of result.stream) {
-      const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      if (textChunk) {
-        fullResponse += textChunk;
-        chrome.runtime.sendMessage({ action: "appendAIMessageChunk", text: textChunk });
+    const result = await model.generateContent(request);
+    const response = result.response;
+    const functionCall = response.candidates?.[0]?.content?.parts?.[0]?.functionCall;
+
+    if (functionCall && functionCall.name === 'image_generation') {
+      const { prompt, negative_prompt, description } = functionCall.args;
+      const imageDataResponse = await generateImage(prompt, negative_prompt);
+      const imageData = imageDataResponse[0]?.data;
+      chrome.runtime.sendMessage({ action: "endAIStream" });
+      return { description, imageData, imagePrompt: prompt };
+    } else {
+      // Fallback to streaming text response if no tool call
+      const stream = await model.generateContentStream(request);
+      let fullResponse = "";
+      for await (const chunk of stream.stream) {
+        const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        if (textChunk) {
+          fullResponse += textChunk;
+          chrome.runtime.sendMessage({ action: "appendAIMessageChunk", text: textChunk });
+        }
       }
+      chrome.runtime.sendMessage({ action: "endAIStream" });
+      return fullResponse;
     }
-    chrome.runtime.sendMessage({ action: "endAIStream" });
-    console.log("Full raw text from API:", fullResponse);
-    return fullResponse;
   } catch (e) {
     chrome.runtime.sendMessage({ action: "displayError", error: e.message || String(e) });
     chrome.runtime.sendMessage({ action: "endAIStream" });
