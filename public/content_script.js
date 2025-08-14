@@ -93,6 +93,7 @@
       context += "\n\n[Context truncated due to length cap]";
     }
 
+    console.log("[CubAI] Scraped Page Content:", context);
     return context;
   }
 

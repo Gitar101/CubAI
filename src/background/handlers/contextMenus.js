@@ -43,14 +43,8 @@ export function setupContextMenus() {
   // On click for context menus
   chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (info.menuItemId === "add_to_context") {
-      // Get the existing context, add the new selection, and save it.
-      chrome.storage.local.get('cubext', (data) => {
-        const existingContext = data.cubext || [];
-        const newContext = [...existingContext, info.selectionText];
-        chrome.storage.local.set({ cubext: newContext });
-      });
-      // Open the side panel for the correct window
-      chrome.sidePanel.open({ windowId: tab.windowId });
+      openSidePanel(tab.id);
+      handleExplainWithCubAI(info, tab);
       return;
     }
     if (info.menuItemId === "explainWithCubAI") {

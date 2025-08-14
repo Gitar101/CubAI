@@ -1,6 +1,6 @@
 // Message handlers for runtime messages
 
-import { callGeminiTool, callGeminiUserMemoryTool, about_user_read, about_user_write, run } from '../api/gemini.js';
+import { callGeminiTool, callGeminiUserMemoryTool, about_user_read, about_user_write, run, uploadFile } from '../api/gemini.js';
 import { defaultGenerationConfig } from '../config/index.js';
 import { getSummarizeState } from './contextMenus.js';
 import { readUserMemory } from '../utils/userMemory.js';
@@ -30,7 +30,7 @@ export function setupMessageHandlers() {
     
     if (action === 'generate-image') {
       const { prompt, originalPrompt } = message;
-      run(prompt)
+      run(prompt, defaultGenerationConfig, null, 'gemini-1.5-flash', 'Image Generation Mode')
         .then(response => {
           if (response && response.imageData) {
             chrome.runtime.sendMessage({
@@ -207,31 +207,19 @@ async function handleSendChatMessage(message, sender, sendResponse) {
     }
   }
 
-  // 5. Add page context to the last user message's parts.
+  // 5. Add page context to the last user message's parts as a file.
   if (systemContext && contents.length > 0) {
     const lastContent = contents[contents.length - 1];
     if (lastContent.role === 'user') {
-      console.log("DEBUG: Adding systemContext to the message parts.", { systemContext: systemContext.substring(0, 100) + "..." });
-      // Convert the system context to a base64 encoded string
-      const encoder = new TextEncoder();
-      const data = encoder.encode(systemContext);
-      // Efficiently convert ArrayBuffer to Base64
-      let binary = '';
-      const bytes = new Uint8Array(data);
-      const len = bytes.byteLength;
-      for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
+      try {
+        const uploadedFile = await uploadFile(systemContext);
+        lastContent.parts.push(createPartFromUri(uploadedFile.uri, uploadedFile.mimeType));
+        console.log("DEBUG: systemContext uploaded as a file and added to the message parts.");
+      } catch (e) {
+        console.error("Error uploading file:", e);
+        // As a fallback, add the context as inline text
+        lastContent.parts.push({ text: `\n\n--- Page Context ---\n\n${systemContext}` });
       }
-      const base64 = btoa(binary);
-
-      // Add the inline data to the message parts
-      lastContent.parts.push({
-        inlineData: {
-          mimeType: 'text/plain',
-          data: base64,
-        },
-      });
-      console.log("DEBUG: systemContext added successfully.");
     }
   }
 
@@ -241,8 +229,11 @@ async function handleSendChatMessage(message, sender, sendResponse) {
   try {
     // First Call (for General Response and Grounding)
     // Get the selected model from the message or default to gemini-2.5-flash
-    const modelName = message.model || "gemini-2.5-flash";
-    const assistantResponse = await run(finalContents, defaultGenerationConfig, systemInstruction, modelName);
+    let modelName = message.mode?.model || "gemini-2.5-flash";
+    if (message.mode === "Image Generation Mode") {
+      modelName = "gemini-1.5-flash";
+    }
+    const assistantResponse = await run(finalContents, defaultGenerationConfig, systemInstruction, modelName, message.mode);
 
     // Second Call (for User Memory) - After the response is complete
     console.log("Using gemini-1.5-flash for user memory processing after response completion.");

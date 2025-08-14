@@ -1,6 +1,6 @@
 // Gemini API integration
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenerativeAI, createPartFromUri } from "@google/generative-ai";
 import { GEMINI_API_KEY } from '../config/index.js';
 import { readUserMemory, writeUserMemory } from '../utils/userMemory.js';
 import { generateImage } from './chutes.js';
@@ -34,8 +34,12 @@ const image_generation = {
   }]
 };
 
+const groundingTool = {
+  googleSearchRetrieval: {},
+};
+
 // Main function to run the generative model
-export async function run(contents, generationConfig, systemInstruction) {
+export async function run(contents, generationConfig, systemInstruction, modelName, mode) {
   // Gemini API expects contents to be an array of objects, not a plain string.
   if (typeof contents === 'string') {
     contents = [{ parts: [{ text: contents }] }];
@@ -46,29 +50,43 @@ export async function run(contents, generationConfig, systemInstruction) {
     return null;
   }
 
-  const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-  const tools = [image_generation];
-
-  const request = { contents, tools, generationConfig };
-  if (systemInstruction) {
-    request.systemInstruction = { role: 'system', parts: [{ text: systemInstruction }] };
-  }
-
   try {
     chrome.runtime.sendMessage({ action: "startAIStream" });
-    const result = await model.generateContent(request);
-    const response = result.response;
-    const functionCall = response.candidates?.[0]?.content?.parts?.[0]?.functionCall;
 
-    if (functionCall && functionCall.name === 'image_generation') {
+    const request = {
+      contents,
+      generationConfig,
+      systemInstruction: systemInstruction ? { role: 'system', parts: [{ text: systemInstruction }] } : undefined,
+    };
+
+    // Use the image_generation tool only when in "Image Generation Mode"
+    if (mode === "Image Generation Mode") {
+      request.tools = [{ functionDeclarations: image_generation.functionDeclarations }];
+      const model = ai.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent(request);
+      const response = result.response;
+      const functionCall = response.candidates?.[0]?.content?.parts?.[0]?.functionCall;
+
+      if (!functionCall || functionCall.name !== 'image_generation') {
+        // If the model didn't call the tool, stream the text response instead.
+        const text = response.text();
+        chrome.runtime.sendMessage({ action: "appendAIMessageChunk", text });
+        chrome.runtime.sendMessage({ action: "endAIStream" });
+        return text;
+      }
+
       const { prompt, negative_prompt, description } = functionCall.args;
       const imageDataResponse = await generateImage(prompt, negative_prompt);
       const imageData = imageDataResponse[0]?.data;
       chrome.runtime.sendMessage({ action: "endAIStream" });
       return { description, imageData, imagePrompt: prompt };
     } else {
-      // Fallback to streaming text response if no tool call
+      // For all other modes, proceed with the standard streaming response.
+      if (systemInstruction?.toLowerCase().includes('ground')) {
+        request.tools = [groundingTool];
+      }
+
+      const model = ai.getGenerativeModel({ model: modelName });
       const stream = await model.generateContentStream(request);
       let fullResponse = "";
       for await (const chunk of stream.stream) {
@@ -146,7 +164,7 @@ export async function callGeminiUserMemoryTool(contents, tools) {
   }
 
   const model = ai.getGenerativeModel({
-    model: "gemini-2.5-flash-lite",
+    model: "gemini-1.5-flash",
     generationConfig: {
       temperature: 0.7,
       topP: 0.8,
@@ -212,7 +230,7 @@ export async function callGeminiSummary(formattedTranscript, videoTitle = "", vi
     return;
   }
 
-  const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
 
   // Retrieve user memory to include in the system prompt
   const userMemory = await readUserMemory();
@@ -280,7 +298,6 @@ export async function callGeminiSummary(formattedTranscript, videoTitle = "", vi
     chrome.runtime.sendMessage({ action: "setMode", mode: "summarize" });
 
     const result = await model.generateContentStream({
-      tools: [groundingTool],
       systemInstruction: { role: 'system', parts: [{ text: systemPrompt }] },
       contents: [{
         role: "user",
@@ -294,7 +311,8 @@ export async function callGeminiSummary(formattedTranscript, videoTitle = "", vi
         topK: 32,
         topP: 0.95,
         maxOutputTokens: 65535,
-      }
+      },
+      tools: [groundingTool],
     });
 
     for await (const chunk of result.stream) {
@@ -454,6 +472,17 @@ const toolHandlers = {
     return { success: true };
   },
 };
+
+// Function to upload a file and return the URI
+// Function to upload a file and return the URI
+export async function uploadFile(content, mimeType = 'text/plain') {
+  const blob = new Blob([content], { type: mimeType });
+  const file = await ai.uploadFile({
+    file: blob,
+    mimeType: mimeType,
+  });
+  return file;
+}
 
 // Export toolHandlers for testing
 export { toolHandlers };

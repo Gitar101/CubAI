@@ -1,372 +1,41 @@
-import React, { useState, useEffect } from 'react';
-import ReactMarkdown from 'react-markdown';
+import React from 'react';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import { useChatState } from '../hooks/useChatState';
+import { useChromeExtension } from '../hooks/useChromeExtension';
+import { useContextState } from '../hooks/useContext';
+import { useUIState } from '../hooks/useUI';
+import { systemPrompts } from '../constants/prompts';
+import Header from './Header';
+import MessageList from './MessageList';
+import InputForm from './InputForm';
+import ContextDisplay from './ContextDisplay';
 
-// Create plugin arrays to ensure they're properly configured
 const remarkPlugins = [remarkGfm, remarkMath];
 const rehypePlugins = [rehypeKatex];
 
-// Function to convert LaTeX code blocks to proper markdown math syntax
-const convertLatexCodeBlocks = (text) => {
-  if (!text) return text;
+const App = () => {
+  const chatState = useChatState();
+  const contextState = useContextState();
+  const uiState = useUIState();
 
-  // Convert ```latex blocks to display math $$...$$
-  // Handle both newline and non-newline cases
-  let converted = text.replace(/```latex\s*\n?([\s\S]*?)\n?```/g, (_, formula) => {
-    return `$$${formula.trim()}$$`;
-  });
+  useChromeExtension(
+    uiState.setMode,
+    chatState.setInputValue,
+    chatState.setSystemContext,
+    contextState.updateContextPreview,
+    chatState.setIsLoading,
+    chatState.setMessages,
+    chatState.setMessageIdCounter,
+    chatState.setError,
+    chatState.messageIdCounter
+  );
 
-  // Convert \(...\) to $...$
-  converted = converted.replace(/\\\((.*?)\\\)/g, (_, formula) => {
-    return `$${formula}$`;
-  });
-
-  // Convert \[...\] to $$...$$
-  converted = converted.replace(/\\\[([\s\S]*?)\\]/g, (_, formula) => {
-    return `$$${formula.trim()}$$`;
-  });
-
-  return converted;
-};
-import ShinyText from './ShinyText';
-import SilkBackground from './SilkBackground.jsx';
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-
-// New system instruction for PCM problem solving and LaTeX formatting
-const PCM_SYSTEM_INSTRUCTION = `
-You are an expert in Physics, Chemistry, and Mathematics. When solving PCM problems, always provide your answer in a very neat and structured manner, using LaTeX formatting for all mathematical expressions, equations, and units. Your response MUST strictly adhere to the following sections:
-
-**1. Given Data:** List all known values with units.
-**2. Formulas:** State all relevant formulas USING LATEX FORMAT!!! important.
-**3. Step-by-Step Solution:** Provide a detailed, logical solution. Show all calculations and intermediate steps using LaTeX.
-**4. Conclusion:** State the final answer clearly with units.
-**5. New lines:** Separate different parts of your response with newlines for clarity and to make it look cleaner.
-**6. Add points:** Use bullet points (\* or -) to structure lists and explanations.
-- Point A
-- Point B
-All mathematical content, including variables, numbers, units, and equations, MUST be enclosed within LaTeX math delimiters (\\( \\) for inline math, \\[ \\] for display math). For example, write \`E = mc^2\` as \`\\(E = mc^2\\)\` or \`\\[E = mc^2\\]\`. Use \`\\text{}\` for regular text within math mode (e.g., \`\\(5 \\text{ kg}\\)\`). DO NOT use code blocks (e.g., \`\`\`latex\`) for LaTeX.',
-`;
-
-function App() {
-  const [messages, setMessages] = useState([]);
-  const [messageIdCounter, setMessageIdCounter] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [error, setError] = useState('');
-  const [showClearChatButton, setShowClearChatButton] = useState(false);
-  const [inputValue, setInputValue] = useState('');
-  // Single full image (legacy) or multiple slices (new)
-  const [capturedImage, setCapturedImage] = useState(null);
-  const [captureMeta, setCaptureMeta] = useState(null); // {w,h,kb}
-  const [capturedSlices, setCapturedSlices] = useState([]); // [{url,w,h,index}]
-  // Keep the full transcript as hidden system context so replies stay accurate
-  const [systemContext, setSystemContext] = useState('');
-  const [summary, setSummary] = useState('');
-  const [contexts, setContexts] = useState([]); // Changed to handle multiple contexts
-  const [isContextVisible, setIsContextVisible] = useState(true); // Keep it simple for now
-
-  const systemPrompts = {
-    Summarize: 'Summarize the provided context. If the context is straightforward, give a concise summary. If it’s complex, give a full, detailed summary covering all key points. Always ground information using Google Search for accuracy. For mathematical expressions, use markdown math syntax: $formula$ for inline math and $$formula$$ for display math.',
-    Explain: 'Analyze the user’s question. If it only needs a direct answer, reply concisely. If it needs depth, give a thorough, structured explanation. Use Google Search to verify facts and fetch missing or specific information. For mathematical expressions, use markdown math syntax: $formula$ for inline math and $$formula$$ for display math.',
-    Chat: 'Engage naturally with the user. Give short answers for simple questions and detailed responses when explanation is needed. If information is missing or specific, use Google Search to get it and ground your response. For mathematical expressions, use markdown math syntax: $formula$ for inline math and $$formula$$ for display math. Never use code blocks for LaTeX formulas.',
-    Tutor: PCM_SYSTEM_INSTRUCTION, // New Tutor mode using the PCM system instruction
-  };
-
-  // UI state: system prompt mode and drop-ups
-  // modes: "chat" | "explain" | "summarize" | "tutor"
-  const [mode, setMode] = useState('chat');
-  const [generationMode, setGenerationMode] = useState('chat'); // 'chat' or 'image'
-  const systemInstruction = systemPrompts[mode];
-  const [showModeMenu, setShowModeMenu] = useState(false);
-  const [showTabsMenu, setShowTabsMenu] = useState(false);
-  const [availableTabs, setAvailableTabs] = useState([]);
-
-  // Model selector (only gemini 2.0 variants)
-  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
-  const [showModelMenu, setShowModelMenu] = useState(false);
-
-  // Debug helper to verify selection is applied
-  useEffect(() => {
-  }, [selectedModel]);
-
-  // Core chat streaming with optional page-context injection
-  const removeContext = (index) => {
-    const newContexts = contexts.filter((_, i) => i !== index);
-    setContexts(newContexts);
-    chrome.storage.local.set({ cubext: newContexts });
-  };
-  
-useEffect(() => {
-    // On component mount, try to get the context from storage.
-    const handleStorageChange = (changes, area) => {
-      if (area === 'local' && changes.cubext) {
-        setContexts(changes.cubext.newValue || []);
-      }
-    };
-
-    chrome.storage.local.get('cubext', (data) => {
-      if (data && data.cubext) {
-        setContexts(data.cubext);
-      }
-    });
-
-    chrome.storage.onChanged.addListener(handleStorageChange);
-
-    return () => {
-      chrome.storage.onChanged.removeListener(handleStorageChange);
-    };
-  }, []);
-  useEffect(() => {
-    if (chrome.runtime && chrome.runtime.onMessage) {
-      const isStreamingRef = { current: false };
-
-      const listener = (message, sender, sendResponse) => {
-        if (message.action === "setMode") {
-          const m = message.mode;
-          if (m === 'explain' || m === 'summarize' || m === 'chat') {
-            setMode(m);
-            // Set the input value and system context if provided
-            if (message.query) {
-              setInputValue(message.query);
-            }
-            if (message.context) {
-              setSystemContext(message.context);
-            }
-            if (message.tabMeta) {
-              updateContextPreview(message.tabMeta);
-            }
-          }
-          return;
-        } else if (message.action === "startAIStream") {
-          setIsLoading(true);
-          isStreamingRef.current = true;
-        } else if (message.action === "appendAIMessageChunk") {
-          const textChunk = message.text || '';
-          if (!textChunk) return;
-          setMessages(prevMessages => {
-            const lastMessage = prevMessages.length > 0 ? prevMessages[prevMessages.length - 1] : null;
-
-            if (lastMessage && lastMessage.role === 'ai' && isStreamingRef.current) {
-              // Append to the existing AI message
-              const updatedMessages = [...prevMessages];
-              const updatedLastMessage = { ...lastMessage };
-              const content = Array.isArray(updatedLastMessage.content) ? [...updatedLastMessage.content] : [];
-              let textContentIndex = content.findIndex(c => c.type === 'text');
-
-              if (textContentIndex !== -1) {
-                content[textContentIndex].text += textChunk;
-              } else {
-                content.push({ type: 'text', text: textChunk });
-              }
-              
-              updatedLastMessage.content = content;
-              updatedMessages[prevMessages.length - 1] = updatedLastMessage;
-              return updatedMessages;
-            } else if (isStreamingRef.current) {
-              // First chunk: create a new AI message
-              const newAiMessage = {
-                id: messageIdCounter,
-                role: 'ai',
-                content: [{ type: 'text', text: textChunk }],
-              };
-              setMessageIdCounter(c => c + 1);
-              return [...prevMessages, newAiMessage];
-            }
-            return prevMessages;
-          });
-        } else if (message.action === "endAIStream") {
-          isStreamingRef.current = false;
-          setIsLoading(false);
-        } else if (message.action === "appendSystemContext") {
-          const text = message.text || '';
-          setSystemContext(text);
-        } else if (message.action === "setContextPreview") {
-          const p = message.preview || {};
-          const url = p.url || '';
-          setContextPreview({
-            title: p.title || 'Untitled',
-            url,
-            origin: (() => { try { return new URL(url).origin; } catch { return url; } })(),
-            favIconUrl: p.favIconUrl || '',
-            tabId: p.id
-          });
-        } else if (message.action === "displayError") {
-          setError(message.error);
-          setIsLoading(false);
-        } else if (message.action === 'displayGeneratedImage') {
-          const { description, imageData, imagePrompt } = message;
-          setMessages(prev => {
-            const content = [];
-            if (description) {
-              content.push({ type: 'text', text: description });
-            }
-            if (imageData) {
-              content.push({ type: 'image', url: imageData });
-            }
-            if (imagePrompt) {
-              content.push({ type: 'image_prompt', text: imagePrompt });
-            }
-            const newAiMessage = {
-              id: messageIdCounter,
-              role: 'ai',
-              content: content,
-            };
-            setMessageIdCounter(p => p + 1);
-            const newMessages = [...prev, newAiMessage];
-            return newMessages;
-          });
-          setIsLoading(false);
-        }
-      };
-      chrome.runtime.onMessage.addListener(listener);
-      return () => chrome.runtime.onMessage.removeListener(listener);
-    }
-  }, [messageIdCounter]);
-
-  const clearChat = () => {
-    setMessages([]);
-    setMessageIdCounter(0);
-    setSystemContext('');
-    setSummary('');
-    setCapturedImage(null);
-    setCapturedSlices([]);
-    setCaptureMeta(null);
-    setContextPreview(null);
-    setHasContextPillBeenRendered(false);
-    setError('');
-    setIsLoading(false);
-    setIsStreaming(false);
-  };
-
-  // Removed "ask a follow up question" flow. Normal chat now covers this.
-
-  // Toggle and populate system prompt switcher (drop-up)
-  const toggleModeMenu = () => {
-    // If opening this menu, ensure the other one closes
-    setShowTabsMenu(false);
-    setShowModelMenu(false);
-    setShowModeMenu(v => !v);
-  };
-  const selectMode = (m) => {
-    setMode(m);
-    // Update the hidden instruction used for requests
-    // The systemInstruction is now derived from the mode state and systemPrompts object.
-    // No need to set it explicitly here.
-    setShowModeMenu(false);
-    // If the mode is "Summarize", trigger a page refresh / re-summarization
-    if (m === 'Summarize') {
-      try {
-        chrome.runtime.sendMessage({ action: "refreshSummarization" });
-      } catch (e) {
-        console.error("[CubAI] Error sending refreshSummarization message:", e);
-      }
-    }
-  };
-
-  // Model select helpers
-  const onSelectModel = (model) => {
-    try { console.log('[ModelSelector] Click select:', model); } catch {}
-    setSelectedModel(model);
-    setShowModelMenu(false);
-  };
-
-  // Right control: add page context -> list tabs (drop-up)
-  const toggleTabsMenu = () => {
-    // If opening this menu, ensure the other one closes
-    const next = !showTabsMenu;
-    setShowModeMenu(false);
-    setShowModelMenu(false);
-    setShowTabsMenu(next);
-    if (next) {
-      try {
-        chrome.runtime.sendMessage({ action: "listTabs" }, (response) => {
-          if (chrome.runtime.lastError) {
-            setError(chrome.runtime.lastError.message);
-            return;
-          }
-          if (response?.error) {
-            setError(response.error);
-            return;
-          }
-          setAvailableTabs(response?.tabs || []);
-        });
-      } catch (e) {
-        // In non-extension environments, fail silently
-      }
-    }
-  };
-
-  // UI preview card of last added page context
-  const [contextPreview, setContextPreview] = useState(null);
-  // Track whether the context pill has been rendered in a message bubble for the current contextPreview
-  const [hasContextPillBeenRendered, setHasContextPillBeenRendered] = useState(false);
-
-  // Update context preview and reset pill rendering status
-  const updateContextPreview = (newPreview) => {
-    setContextPreview(newPreview);
-    setHasContextPillBeenRendered(false); // Reset when new context is set
-  };
-
-  const addTabContext = (tabId) => {
-    try {
-      const tabMeta = (availableTabs || []).find(t => t.id === tabId);
-      chrome.runtime.sendMessage({ action: "getTabContent", tabId }, (response) => {
-        if (chrome.runtime.lastError) {
-          setError(chrome.runtime.lastError.message);
-          return;
-        }
-        if (response?.error) {
-          setError(response.error);
-          return;
-        }
-        const text = response?.content || '';
-        // Store or append to hidden system context
-        setSystemContext(prev => (prev ? `${prev}\n\n[Page ${tabId}]\n${text}` : text));
-        setShowTabsMenu(false);
-
-        // Build a preview card for the composer
-        const title = tabMeta?.title || 'Untitled';
-        const url = tabMeta?.url || '';
-        updateContextPreview({
-          title,
-          url,
-          origin: (() => {
-            try { return new URL(url).origin; } catch { return url; }
-          })(),
-          favIconUrl: tabMeta?.favIconUrl || '',
-          tabId
-        });
-      });
-    } catch (e) {}
-  };
-
-  // Close open menus on outside click (model menu references removed)
-  useEffect(() => {
-    const onPointerDown = (e) => {
-      // Ignore clicks inside any of the menus or their trigger buttons
-      const target = e.target;
-      const closest = (sel) => target.closest(sel);
-
-      // Mark the DOM anchors to prevent immediate-close during selection
-      const inMode = closest('[data-menu="mode"]') || closest('[data-trigger="mode"]');
-      const inTabs = closest('[data-menu="tabs"]') || closest('[data-trigger="tabs"]');
-      const inModel = closest('[data-menu="model"]') || closest('[data-trigger="model"]');
-
-      if (!inMode && showModeMenu) setShowModeMenu(false);
-      if (!inTabs && showTabsMenu) setShowTabsMenu(false);
-      if (!inModel && showModelMenu) setShowModelMenu(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown, { capture: true });
-    return () => document.removeEventListener('pointerdown', onPointerDown, { capture: true });
-  }, [showModeMenu, showTabsMenu, showModelMenu]);
-
-  // Restore send flow with curved input, honoring current mode
   const handleSend = () => {
-    if (generationMode === 'image') {
-      if (!inputValue.trim()) return;
+    if (uiState.generationMode === 'image') {
+      if (!chatState.inputValue.trim()) return;
 
       const getFormattedImageContext = (history, newUserPrompt) => {
         let contextString = `<system prompt>\nYou are an expert image generator. Follow the user's instructions carefully.\n`;
@@ -395,151 +64,137 @@ useEffect(() => {
         return contextString;
       };
 
-      const imageContext = getFormattedImageContext(messages, inputValue);
+      const imageContext = getFormattedImageContext(chatState.messages, chatState.inputValue);
       
-      const isFirstImage = !messages.some(m => m.role === 'ai' && m.content.some(c => c.type === 'image' || c.type === 'image_prompt'));
+      const isFirstImage = !chatState.messages.some(m => m.role === 'ai' && m.content.some(c => c.type === 'image' || c.type === 'image_prompt'));
 
       const newUserMessage = {
-        id: messageIdCounter,
+        id: chatState.messageIdCounter,
         role: 'user',
-        content: [{ type: 'text', text: isFirstImage ? `${inputValue}` : inputValue }]
+        content: [{ type: 'text', text: isFirstImage ? `${chatState.inputValue}` : chatState.inputValue }]
       };
       
-      setMessages(prev => [...prev, newUserMessage]);
-      setMessageIdCounter(prev => prev + 1);
-      setIsLoading(true);
+      chatState.setMessages(prev => [...prev, newUserMessage]);
+      chatState.setMessageIdCounter(prev => prev + 1);
+      chatState.setIsLoading(true);
       
       chrome.runtime.sendMessage({
         action: 'generate-image',
         prompt: imageContext,
-        originalPrompt: inputValue,
+        originalPrompt: chatState.inputValue,
       });
       
-      setInputValue('');
+      chatState.setInputValue('');
       return;
     }
 
-    if (!inputValue.trim() && !capturedImage && (!capturedSlices || capturedSlices.length === 0)) return;
+    if (!chatState.inputValue.trim() && !chatState.capturedImage && (!chatState.capturedSlices || chatState.capturedSlices.length === 0)) return;
 
-    const finalUserInput = inputValue;
+    const finalUserInput = chatState.inputValue;
     const content = [];
-    if (capturedImage) {
-      content.push({ type: 'image', url: capturedImage });
-      if (captureMeta?.w && captureMeta?.h) {
-        content.push({ type: 'text', text: `//image-size: ${captureMeta.w}x${captureMeta.h}` });
+    if (chatState.capturedImage) {
+      content.push({ type: 'image', url: chatState.capturedImage });
+      if (chatState.captureMeta?.w && chatState.captureMeta?.h) {
+        content.push({ type: 'text', text: `//image-size: ${chatState.captureMeta.w}x${chatState.captureMeta.h}` });
       }
     }
-    if (capturedSlices && capturedSlices.length > 0) {
-      capturedSlices
+    if (chatState.capturedSlices && chatState.capturedSlices.length > 0) {
+      chatState.capturedSlices
         .slice()
         .sort((a, b) => a.index - b.index)
         .forEach(s => content.push({ type: 'image', url: s.url }));
-      const totalKB = Math.round(capturedSlices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
-      content.push({ type: 'text', text: `//image-slices: ${capturedSlices.length} • ~${totalKB} KB` });
+      const totalKB = Math.round(chatState.capturedSlices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
+      content.push({ type: 'text', text: `//image-slices: ${chatState.capturedSlices.length} • ~${totalKB} KB` });
     }
     if (finalUserInput.trim()) content.push({ type: 'text', text: finalUserInput });
 
-    const newUserMessage = { id: messageIdCounter, role: 'user', content, contexts: contexts };
+    const newUserMessage = { id: chatState.messageIdCounter, role: 'user', content, contexts: contextState.contexts };
 
-    // For text-based chat, immediately add a placeholder for the AI response
-    // to allow streaming into a pre-existing container. For image generation,
-    // the response is handled separately to avoid showing an empty box.
     const newAiMessage = {
-      id: messageIdCounter + 1,
+      id: chatState.messageIdCounter + 1,
       role: 'ai',
       content: [{ type: 'text', text: '' }],
     };
 
-    setMessages(prev => [...prev, newUserMessage, newAiMessage]);
-    setMessageIdCounter(prev => prev + 2);
-    setIsLoading(true);
+    chatState.setMessages(prev => [...prev, newUserMessage, newAiMessage]);
+    chatState.setMessageIdCounter(prev => prev + 2);
+    chatState.setIsLoading(true);
 
-    setInputValue('');
-    setCapturedImage(null);
-    setCapturedSlices([]);
-    if (contexts.length > 0) {
-      setContexts([]);
+    chatState.setInputValue('');
+    chatState.setCapturedImage(null);
+    chatState.setCapturedSlices([]);
+    if (contextState.contexts.length > 0) {
+      contextState.setContexts([]);
       chrome.storage.local.set({ cubext: [] });
     }
 
     const performSend = (includeCtx, systemCtxForSend) => {
       const finalUserMessage = { ...newUserMessage, content: [...newUserMessage.content] };
-      if (includeCtx && contextPreview?.url && !hasContextPillBeenRendered) {
-        finalUserMessage.content.push({ type: 'text', text: `//context-url: ${contextPreview.url}` });
-        setHasContextPillBeenRendered(true);
+      if (includeCtx && contextState.contextPreview?.url && !contextState.hasContextPillBeenRendered) {
+        finalUserMessage.content.push({ type: 'text', text: `//context-url: ${contextState.contextPreview.url}` });
+        contextState.setHasContextPillBeenRendered(true);
       }
 
-      const finalMessages = [...messages, finalUserMessage];
+      const finalMessages = [...chatState.messages, finalUserMessage];
+
+      const useGoogleSearch = ['summarize', 'explain', 'chat', 'Tutor'].includes(uiState.mode);
 
       chrome.runtime.sendMessage({
         action: "sendChatMessage",
         messages: JSON.parse(JSON.stringify(finalMessages)),
-        systemInstruction,
+        systemInstruction: systemPrompts[uiState.mode],
         systemContext: includeCtx ? systemCtxForSend : null,
-        model: selectedModel,
-        file: null
+        model: uiState.selectedModel,
+        file: null,
+        useGoogleSearch: useGoogleSearch
       });
     };
 
-    const shouldIncludeContext = mode === 'explain' || mode === 'summarize' || mode === 'Tutor';
+    const shouldIncludeContext = ['explain', 'summarize', 'Tutor'].includes(uiState.mode);
 
-    if (shouldIncludeContext) {
-      if (systemContext && contextPreview?.url && hasContextPillBeenRendered) {
-        performSend(true, systemContext);
-      } else {
-        try {
-          chrome.runtime.sendMessage({ action: "getActiveTabCubAIContext" }, (resp) => {
-            if (chrome.runtime.lastError || !resp || !resp.ok) {
-              const errMsg = resp?.error || chrome.runtime.lastError?.message || "Failed to get page context";
-              if (mode === 'chat') {
-                console.warn(`[CubAI] Could not get page context for chat: ${errMsg}. Sending without it.`);
-                performSend(false, null);
-              } else {
-                setError(errMsg);
-                setIsLoading(false);
-              }
-              return;
-            }
-
+    if (shouldIncludeContext && chatState.systemContext) {
+      performSend(true, chatState.systemContext);
+    } else if (shouldIncludeContext) {
+      // Fallback for cases where context might not have been set yet
+      try {
+        chrome.runtime.sendMessage({ action: "getActiveTabCubAIContext" }, (resp) => {
+          if (chrome.runtime.lastError || !resp || !resp.ok) {
+            const errMsg = resp?.error || chrome.runtime.lastError?.message || "Failed to get page context";
+            chatState.setError(errMsg);
+            chatState.setIsLoading(false);
+          } else {
             const { context, tabMeta } = resp;
-            const currentTabUrl = tabMeta?.url || '';
-            const previousContextUrl = contextPreview?.url || '';
-
-            if (currentTabUrl !== previousContextUrl) {
-              setSystemContext(context || '');
-              updateContextPreview({
-                title: tabMeta?.title || 'Untitled',
-                url: currentTabUrl,
-                origin: (() => { try { return new URL(currentTabUrl).origin; } catch { return currentTabUrl; } })(),
-                favIconUrl: tabMeta?.favIconUrl || '',
-                tabId: tabMeta?.id
-              });
-            } else {
-              setSystemContext(context || '');
-            }
+            chatState.setSystemContext(context || '');
+            contextState.updateContextPreview({
+              title: tabMeta?.title || 'Untitled',
+              url: tabMeta?.url || '',
+              origin: (() => { try { return new URL(tabMeta?.url).origin; } catch { return tabMeta?.url; } })(),
+              favIconUrl: tabMeta?.favIconUrl || '',
+              tabId: tabMeta?.id
+            });
             performSend(true, context || '');
-          });
-        } catch (e) {
-          setError(String(e?.message || e));
-          setIsLoading(false);
-        }
+          }
+        });
+      } catch (e) {
+        chatState.setError(String(e?.message || e));
+        chatState.setIsLoading(false);
       }
     } else {
       performSend(false, null);
     }
   };
+
   const handleInputChange = (e) => {
     const textarea = e.target;
-    textarea.style.height = 'auto'; // Reset height to auto to calculate new height
-    textarea.style.height = textarea.scrollHeight + 'px'; // Set height to scrollHeight
-    setInputValue(textarea.value);
+    textarea.style.height = 'auto';
+    textarea.style.height = textarea.scrollHeight + 'px';
+    chatState.setInputValue(textarea.value);
   };
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter') {
       if (e.shiftKey) {
-        // Allow new line with Shift+Enter
-        setInputValue(prev => prev + '\n');
+        chatState.setInputValue(prev => prev + '\n');
         e.preventDefault();
       } else {
         handleSend();
@@ -556,7 +211,7 @@ useEffect(() => {
         const blob = item.getAsFile();
         const reader = new FileReader();
         reader.onload = () => {
-          setCapturedImage(reader.result);
+          chatState.setCapturedImage(reader.result);
         };
         reader.readAsDataURL(blob);
         e.preventDefault();
@@ -565,1083 +220,124 @@ useEffect(() => {
     }
   };
 
-  // Request page capture. Background now returns multiple slices (no stitching).
   const handleCaptureFullPage = async () => {
     const dbg = (msg, extra) => { try { console.log('[CaptureFullPage]', msg, extra ?? ''); } catch {} };
     try {
-      setError('');
-      setCapturedImage(null);
-      setCapturedSlices([]);
+      chatState.setError('');
+      chatState.setCapturedImage(null);
+      chatState.setCapturedSlices([]);
       dbg('Sending chrome.runtime.sendMessage', { action: 'captureFullPage' });
       chrome.runtime.sendMessage({ action: 'captureFullPage' }, (resp) => {
-        // Guard undefined callback param
         if (typeof resp === 'undefined') {
           const lastErr = chrome?.runtime?.lastError?.message;
           dbg('Response is undefined', { lastError: lastErr });
-          setError(lastErr || 'No response from background for captureFullPage');
+          chatState.setError(lastErr || 'No response from background for captureFullPage');
           return;
         }
         dbg('Received response', { keys: Object.keys(resp || {}), ok: resp?.ok, slices: Array.isArray(resp?.slices) ? resp.slices.length : 0 });
         if (chrome.runtime.lastError) {
           dbg('chrome.runtime.lastError', chrome.runtime.lastError.message);
-          setError(chrome.runtime.lastError.message);
+          chatState.setError(chrome.runtime.lastError.message);
           return;
         }
         if (!resp || !resp.ok) {
           dbg('Not ok response', resp);
-          setError(resp?.error || 'Failed to capture page');
+          chatState.setError(resp?.error || 'Failed to capture page');
           return;
         }
         if (Array.isArray(resp.slices) && resp.slices.length > 0) {
           dbg('Applying slices', { count: resp.slices.length, first: resp.slices[0] ? { w: resp.slices[0].w, h: resp.slices[0].h, len: resp.slices[0].url?.length } : null });
-          setCapturedSlices(resp.slices);
+          chatState.setCapturedSlices(resp.slices);
           const totalKB = Math.round(resp.slices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
-          // Use the first slice meta just to show hint numbers
-          setCaptureMeta({ w: resp.slices[0].w, h: resp.slices[0].h, kb: totalKB });
+          chatState.setCaptureMeta({ w: resp.slices[0].w, h: resp.slices[0].h, kb: totalKB });
         } else if (resp.dataUrl) {
           dbg('Applying single image', { len: resp.dataUrl.length, w: resp.width, h: resp.height });
-          // Backward compatibility if a single stitched image is returned
-          setCapturedImage(resp.dataUrl);
+          chatState.setCapturedImage(resp.dataUrl);
           const approxKB = Math.round((resp.dataUrl.length * 3 / 4) / 1024);
-          setCaptureMeta({ w: resp.width, h: resp.height, kb: approxKB });
+          chatState.setCaptureMeta({ w: resp.width, h: resp.height, kb: approxKB });
         } else {
           dbg('No data in response', resp);
-          setError('Capture returned no data');
+          chatState.setError('Capture returned no data');
         }
       });
     } catch (e) {
       dbg('Exception thrown', e);
-      setError(String(e?.message || e));
+      chatState.setError(String(e?.message || e));
     }
   };
 
-  const toggleGenerationMode = () => {
-    setGenerationMode(prev => prev === 'chat' ? 'image' : 'chat');
+  const addTabContext = (tabId) => {
+    try {
+      const tabMeta = (uiState.availableTabs || []).find(t => t.id === tabId);
+      chrome.runtime.sendMessage({ action: "getTabContent", tabId }, (response) => {
+        if (chrome.runtime.lastError) {
+          chatState.setError(chrome.runtime.lastError.message);
+          return;
+        }
+        if (response?.error) {
+          chatState.setError(response.error);
+          return;
+        }
+        const text = response?.content || '';
+        chatState.setSystemContext(prev => (prev ? `${prev}\n\n[Page ${tabId}]\n${text}` : text));
+        uiState.toggleTabsMenu();
+
+        const title = tabMeta?.title || 'Untitled';
+        const url = tabMeta?.url || '';
+        contextState.updateContextPreview({
+          title,
+          url,
+          origin: (() => {
+            try { return new URL(url).origin; } catch { return url; }
+          })(),
+          favIconUrl: tabMeta?.favIconUrl || '',
+          tabId
+        });
+      });
+    } catch (e) {
+      chatState.setError("Failed to add tab context.");
+    }
   };
- 
+
   return (
     <div className="app-container" style={{ position: 'relative', minHeight: '100vh', backgroundColor: '#BCA88D' }}>
-      {/* Solid background applied via inline style above (removed SilkBackground) */}
-
-      <header
-        className="header"
-        style={{
-          position: 'relative',
-          zIndex: 1,
-          // Subtly darker warm sand to blend with #BCA88D background
-          backgroundColor: '#9E876D',
-          borderBottom: '1px solid #3E3F29'
-        }}
-      >
-        <div
-          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px' }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Brand icon from public/cubai.png next to text */}
-          <img
-            src="/cubai2.png"
-            alt=""
-            aria-hidden="true"
-            width="28"
-            height="28"
-            style={{ display: 'block', filter: 'brightness(1) contrast(1)', borderRadius: 6 }}
-          />
-
-          {/* Brand text with shine */}
-          <ShinyText text="CubAI" speed={5} />
-
-          {/* Spacer */}
-          <div style={{ flex: 1 }} />
-
-          {/* Clear chat button */}
-          <button
-            onClick={clearChat}
-            aria-label="Clear chat"
-            title="Clear chat"
-            style={{
-              background: '#F5EFE6', /* Cream color */
-              border: '1px solid #7D8D86', /* Matching border from palette */
-              color: '#a17f51ff', /* Creamy brown color for the plus sign, matching background */
-              cursor: 'pointer',
-              fontSize: '20px', /* Slightly smaller font for better fit */
-              fontWeight: 'bold',
-              padding: '4px 12px', /* Thicker padding */
-              borderRadius: '8px', /* Rounded corners */
-              boxShadow: '0 2px 4px rgba(0,0,0,0.1)', /* Subtle shadow */
-            }}
-          >
-            +
-          </button>
-
-          {/* Model switch removed per request */}
-        </div>
-      </header>
-
-      <main className="main-content" style={{ position: 'relative', zIndex: 1 }}>
-        <div className="chat-area">
-          {/* Only one rendering path for the summary: either as a pinned block OR as part of chat.
-              To avoid duplicated visual content, we will NOT pin if the latest AI message already equals summary. */}
-          {(() => {
-            const last = messages[messages.length - 1];
-            const lastText = last?.role === 'ai' ? (last.content?.[0]?.text || '') : '';
-            const shouldPin = summary && summary.trim() && summary.trim() !== lastText.trim();
-            return shouldPin ? (
-              <div className="summary-section">
-                <h3>Summary:</h3>
-                <ReactMarkdown
-                  remarkPlugins={remarkPlugins}
-                  rehypePlugins={rehypePlugins}
-                  components={{
-                    table: ({node, ...props}) => (
-                      <table style={{
-                        borderCollapse: 'collapse',
-                        width: '100%',
-                        margin: '12px 0',
-                        backgroundColor: 'rgb(107 79 59)',
-                        borderRadius: '8px',
-                        overflow: 'hidden'
-                      }} {...props} />
-                    ),
-                    th: ({node, ...props}) => (
-                      <th style={{
-                        border: '1px solid rgba(255, 255, 255, 0.15)',
-                        padding: '8px 12px',
-                        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                        fontWeight: 600,
-                        color: '#f0f0f0'
-                      }} {...props} />
-                    ),
-                    td: ({node, ...props}) => (
-                      <td style={{
-                        border: '1px solid rgba(255, 255, 255, 0.15)',
-                        padding: '8px 12px',
-                        color: '#e0e0e0'
-                      }} {...props} />
-                    )
-                  }}
-                >
-                  {convertLatexCodeBlocks(summary)}
-                </ReactMarkdown>
-              </div>
-            ) : null;
-          })()}
-          {messages.map((msg) => {
-            const textParts = msg.content.filter(p => p.type === 'text');
-            const imageParts = msg.content.filter(p => p.type === 'image');
-            const hasImage = imageParts.length > 0;
-            const hasText = textParts.length > 0;
-
-            if (!hasText && !hasImage) {
-              return null;
-            }
-
-            const isAiImageMsg = msg.role === 'ai' && hasImage;
-
-            if (isAiImageMsg) {
-              return (
-                <React.Fragment key={msg.id}>
-                  <div
-                    className="message ai-message"
-                    style={{
-                      padding: '12px',
-                      background: 'rgba(255, 255, 255, 0.6)',
-                      border: '1px solid #3E3F29',
-                      borderRadius: '12px',
-                      color: '#1b1b1b'
-                    }}
-                  >
-                    <div
-                      className="image-container"
-                      style={{
-                        borderRadius: '8px',
-                        overflow: 'hidden',
-                        border: '1px solid #9E876D'
-                      }}
-                    >
-                      {imageParts.map((part, i) => (
-                        <img
-                          key={`${msg.id}-img-${i}`}
-                          src={part.url}
-                          alt="Content"
-                          style={{
-                            width: '100%',
-                            height: 'auto',
-                            display: 'block',
-                            maxWidth: 'none',
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                  {hasText && (
-                    <div
-                      key={`${msg.id}-text`}
-                      className="message ai-message"
-                      style={{
-                        border: '1px solid #3E3F29',
-                        background: 'rgba(255,255,255,0.55)',
-                        color: '#1b1b1b'
-                      }}
-                    >
-                      {textParts.map((part, i) => {
-                        const key = `${msg.id}-${i}`;
-                        const text = part.text || '';
-                        return (
-                          <ReactMarkdown
-                            key={key + '-md'}
-                            remarkPlugins={remarkPlugins}
-                            rehypePlugins={rehypePlugins}
-                            components={{
-                              table: ({node, ...props}) => (
-                                <table style={{
-                                  borderCollapse: 'collapse',
-                                  width: '100%',
-                                  margin: '12px 0',
-                                  backgroundColor: 'rgb(107 79 59)',
-                                  borderRadius: '8px',
-                                  overflow: 'hidden'
-                                }} {...props} />
-                              ),
-                              th: ({node, ...props}) => (
-                                <th style={{
-                                  border: '1px solid rgba(255, 255, 255, 0.15)',
-                                  padding: '8px 12px',
-                                  backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                                  fontWeight: 600,
-                                  color: '#f0f0f0'
-                                }} {...props} />
-                              ),
-                              td: ({node, ...props}) => (
-                                <td style={{
-                                  border: '1px solid rgba(255, 255, 255, 0.15)',
-                                  padding: '8px 12px',
-                                  color: '#e0e0e0'
-                                }} {...props} />
-                              )
-                            }}
-                          >
-                            {convertLatexCodeBlocks(text)}
-                          </ReactMarkdown>
-                        );
-                      })}
-                    </div>
-                  )}
-                </React.Fragment>
-              );
-            }
-
-            return (
-              <div
-                key={msg.id}
-                className={`message ${msg.role}-message`}
-                style={{
-                  border: '1px solid #3E3F29',
-                  background: 'rgba(255,255,255,0.55)',
-                  color: '#1b1b1b'
-                }}
-              >
-                {/* Render image(s) first if they exist */}
-                {hasImage && (
-                  <div
-                    className="image-container"
-                    style={{
-                      marginBottom: hasText ? '12px' : '0',
-                      borderRadius: '8px',
-                      overflow: 'hidden',
-                      border: 'none'
-                    }}
-                  >
-                    {imageParts.map((part, i) => (
-                      <img
-                        key={`${msg.id}-img-${i}`}
-                        src={part.url}
-                        alt="Content"
-                        style={{
-                          width: '100%',
-                          height: 'auto',
-                          display: 'block',
-                          maxWidth: '100%', // Keep user images constrained
-                        }}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {/* Render text content if it exists, using the original logic */}
-                {hasText && (
-                  <>
-                    {msg.contexts && msg.contexts.length > 0 && (
-                      <div className="context-pills-container" style={{ marginBottom: '10px' }}>
-                        {msg.contexts.map((context, index) => (
-                          <div key={index} className="context-pill" style={{ padding: '8px 12px', marginBottom: '5px', borderRadius: '8px', background: 'rgba(0,0,0,0.1)', border: '1px solid #7D8D86', color: '#1b1b1b', fontSize: '14px' }}>
-                            <p style={{ margin: '0', fontStyle: 'italic' }}>{context}</p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {textParts.map((part, i) => {
-                      const key = `${msg.id}-${i}`;
-                      const raw = part.text || '';
-                      const hiddenTokenMatch = raw.match(/^\/\/context-url:\s*(https?:\/\/[^\s)]+)\s*$/i);
-                      if (hiddenTokenMatch) {
-                        const url = hiddenTokenMatch[1];
-                        let hostname = '';
-                        let origin = '';
-                        try {
-                          const u = new URL(url);
-                          hostname = u.hostname;
-                          origin = u.origin;
-                        } catch {
-                          hostname = url.replace(/^https?:\/\//i, '');
-                          origin = null;
-                        }
-                        const favicon = origin ? `${origin}/favicon.ico` : '';
-                        const title = hostname ? hostname : (url.length > 60 ? url.slice(0, 57) + '…' : url);
-
-                        return (
-                          <a
-                            key={key + '-card'}
-                            href={url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 10,
-                              marginTop: 8,
-                              padding: 10,
-                              borderRadius: 12,
-                              background: '#111317',
-                              color: '#e8e8e8',
-                              textDecoration: 'none',
-                              border: '1px solid #22252b',
-                            }}
-                          >
-                            <div
-                              style={{
-                                width: 28,
-                                height: 28,
-                                borderRadius: '50%',
-                                overflow: 'hidden',
-                                background: '#23262d',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                flex: '0 0 auto',
-                              }}
-                            >
-                              {favicon ? (
-                                <img
-                                  src={favicon}
-                                  alt=""
-                                  width="20"
-                                  height="20"
-                                  style={{ display: 'block' }}
-                                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                                />
-                              ) : (
-                                <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#444' }} />
-                              )}
-                            </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                              <div
-                                style={{
-                                  fontWeight: 700,
-                                  color: '#f1f5f9',
-                                  lineHeight: 1.2,
-                                  whiteSpace: 'nowrap',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  maxWidth: '100%',
-                                }}
-                                title={title}
-                              >
-                                {title}
-                              </div>
-                              <div
-                                style={{
-                                  fontSize: 12,
-                                  color: '#a1a1aa',
-                                  whiteSpace: 'nowrap',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  marginTop: 2,
-                                  maxWidth: '100%',
-                                }}
-                                title={hostname || url}
-                              >
-                                {hostname || url}
-                              </div>
-                            </div>
-                          </a>
-                        );
-                      }
-
-                      const text = raw;
-                      const urlMatch = text.match(/https?:\/\/[^\s)]+/i);
-                      const url = urlMatch ? urlMatch[0] : null;
-
-                      const textNode = (
-                        <ReactMarkdown
-                          key={key + '-md'}
-                          remarkPlugins={remarkPlugins}
-                          rehypePlugins={rehypePlugins}
-                          components={{
-                            table: ({node, ...props}) => (
-                              <table style={{
-                                borderCollapse: 'collapse',
-                                width: '100%',
-                                margin: '12px 0',
-                                backgroundColor: 'rgb(107 79 59)',
-                                borderRadius: '8px',
-                                overflow: 'hidden'
-                              }} {...props} />
-                            ),
-                            th: ({node, ...props}) => (
-                              <th style={{
-                                border: '1px solid rgba(255, 255, 255, 0.15)',
-                                padding: '8px 12px',
-                                backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                                fontWeight: 600,
-                                color: '#f0f0f0'
-                              }} {...props} />
-                            ),
-                            td: ({node, ...props}) => (
-                              <td style={{
-                                border: '1px solid rgba(255, 255, 255, 0.15)',
-                                padding: '8px 12px',
-                                color: '#e0e0e0'
-                              }} {...props} />
-                            )
-                          }}
-                        >
-                          {convertLatexCodeBlocks(text)}
-                        </ReactMarkdown>
-                      );
-
-                      if (!url) {
-                        return textNode;
-                      }
-
-                      let hostname = '';
-                      let origin = '';
-                      try {
-                        const u = new URL(url);
-                        hostname = u.hostname;
-                        origin = u.origin;
-                      } catch {
-                        hostname = url.replace(/^https?:\/\//i, '');
-                        origin = null;
-                      }
-                      const favicon = origin ? `${origin}/favicon.ico` : '';
-                      const title = hostname ? hostname : (url.length > 60 ? url.slice(0, 57) + '…' : url);
-
-                      const card = (
-                        <a
-                          key={key + '-card'}
-                          href={url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 10,
-                            marginTop: 8,
-                            padding: 10,
-                            borderRadius: 12,
-                            background: '#111317',
-                            color: '#e8e8e8',
-                            textDecoration: 'none',
-                            border: '1px solid #22252b',
-                          }}
-                        >
-                          <div
-                            style={{
-                              width: 28,
-                              height: 28,
-                              borderRadius: '50%',
-                              overflow: 'hidden',
-                              background: '#23262d',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              flex: '0 0 auto',
-                            }}
-                          >
-                            {favicon ? (
-                              <img
-                                src={favicon}
-                                alt=""
-                                width="20"
-                                height="20"
-                                style={{ display: 'block' }}
-                                onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                              />
-                            ) : (
-                              <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#444' }} />
-                            )}
-                          </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                            <div
-                              style={{
-                                fontWeight: 700,
-                                color: '#f1f5f9',
-                                lineHeight: 1.2,
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                maxWidth: '100%',
-                              }}
-                              title={title}
-                            >
-                              {title}
-                            </div>
-                            <div
-                              style={{
-                                fontSize: 12,
-                                color: '#a1a1aa',
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                marginTop: 2,
-                                maxWidth: '100%',
-                              }}
-                              title={hostname || url}
-                            >
-                              {hostname || url}
-                            </div>
-                          </div>
-                        </a>
-                      );
-
-                      return (
-                        <div key={key} style={{ display: 'flex', flexDirection: 'column' }}>
-                          {textNode}
-                          {card}
-                        </div>
-                      );
-                    })}
-                  </>
-                )}
-              </div>
-            );
-          })}
-          {isLoading && <div className="loading-message">Loading...</div>}
-          {error && <div className="message error-message">{error}</div>}
-        </div>
-      </main>
-
-      {/* Floating chat composer styled like the screenshot */}
-      <div
-        className="floating-input-bar"
-        style={{ position: 'fixed', left: 0, right: 0, bottom: 16, display: 'flex', justifyContent: 'center', zIndex: 2 }}
-        onClick={(e) => {
-          // Prevent clicks inside the bar from propagating to document (so outside-click closes work)
-          e.stopPropagation?.();
-        }}
-      >
-        <div
-          className="curved-input-wrapper"
-          style={{
-            width: '92%',
-            maxWidth: 820,
-          }}
-        >
-           {/* Context Indicator */}
-           {isContextVisible && contexts.map((context, index) => (
-            <div key={index} style={{ padding: '8px 12px', marginBottom: '10px', borderRadius: '8px', background: 'rgba(0,0,0,0.1)', border: '1px solid #7D8D86', color: '#1b1b1b', fontSize: '14px', position: 'relative' }}>
-              <p style={{ margin: '4px 0 0', fontStyle: 'italic' }}>{context}</p>
-              <button
-                onClick={() => removeContext(index)}
-                style={{ position: 'absolute', top: '4px', right: '4px', background: 'transparent', border: 'none', cursor: 'pointer', color: '#3E3F29' }}
-              >
-                &#x2715;
-              </button>
-            </div>
-           ))}
-          {/* Context preview pill/card */}
-          {contextPreview && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                marginBottom: 10,
-                padding: '10px 12px',
-                borderRadius: 10,
-                background: 'rgba(0,0,0,0.10)',
-                border: '1px solid #7D8D86'
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {contextPreview.favIconUrl ? (
-                <img
-                  src={contextPreview.favIconUrl}
-                  alt=""
-                  style={{ width: 22, height: 22, borderRadius: 6, objectFit: 'cover', background: '#1f2937' }}
-                  onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.nextSibling.style.display = 'inline-grid'; }}
-                />
-              ) : null}
-              <span
-                style={{
-                  width: 22, height: 22, borderRadius: 6, display: contextPreview.favIconUrl ? 'none' : 'inline-grid',
-                  placeItems: 'center', background: 'transparent', border: '1px solid rgba(0,0,0,0.25)'
-                }}
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#3E3F29" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="9" />
-                  <path d="M3 12h18" />
-                  <path d="M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18" />
-                </svg>
-              </span>
-              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                <div style={{ fontWeight: 600, color: '#1b1b1b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {contextPreview.title}
-                </div>
-                <div style={{ fontSize: 12, color: '#3E3F29', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {contextPreview.origin}
-                </div>
-              </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); setContextPreview(null); }}
-                aria-label="Remove context"
-                title="Remove context"
-                style={{
-                  marginLeft: 'auto',
-                  background: 'transparent',
-                  border: 'none',
-                  color: '#3E3F29',
-                  cursor: 'pointer'
-                }}
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#3E3F29" strokeWidth="1.8" strokeLinecap="round">
-                  <path d="M6 6l12 12M18 6L6 18" />
-                </svg>
-              </button>
-            </div>
-          )}
-          {/* Screenshot preview chip (single image or multiple slices) */}
-          {(capturedImage || capturedSlices.length > 0) && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                marginBottom: 10,
-                padding: '8px 10px',
-                borderRadius: 10,
-                background: 'rgba(0,0,0,0.10)',
-                border: '1px solid #7D8D86'
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {capturedImage && (
-                <div style={{ width: 58, height: 38, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.2)', background: '#111317' }}>
-                  <img
-                    src={capturedImage}
-                    alt="Page capture preview"
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                  />
-                </div>
-              )}
-              {capturedSlices.length > 0 && (
-                <div style={{ display: 'flex', gap: 4, overflowX: 'auto', maxWidth: 200 }}>
-                  {capturedSlices.map((slice, idx) => (
-                    <div key={idx} style={{ flexShrink: 0, width: 58, height: 38, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.2)', background: '#111317' }}>
-                      <img
-                        src={slice.url}
-                        alt={`Page capture slice ${idx + 1}`}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                <div style={{ fontWeight: 600, color: '#1b1b1b' }}>
-                  Page screenshot
-                </div>
-                <div style={{ fontSize: 12, color: '#3E3F29' }}>
-                  {capturedSlices.length > 0 ?
-                    `${capturedSlices.length} slices${captureMeta?.kb ? ` • ~${captureMeta.kb} KB` : ''}` :
-                    `${captureMeta?.w}×${captureMeta?.h}${captureMeta?.kb ? ` • ~${captureMeta.kb} KB` : ''}`
-                  }
-                </div>
-              </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); setCapturedImage(null); setCapturedSlices([]); setCaptureMeta(null); }}
-                aria-label="Remove screenshot"
-                title="Remove screenshot"
-                style={{ marginLeft: 'auto', background: 'transparent', border: 'none', color: '#3E3F29', cursor: 'pointer' }}
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#3E3F29" strokeWidth="1.8" strokeLinecap="round">
-                  <path d="M6 6l12 12M18 6L6 18" />
-                </svg>
-              </button>
-            </div>
-          )}
-          <div
-            className="input-surface"
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 12,
-              padding: 14,
-              borderRadius: 12,
-              background: 'rgba(0,0,0,0.12)',
-              border: '1px solid #7D8D86',
-              boxShadow: '0 2px 12px rgba(0,0,0,0.20)',
-              position: 'relative'
-            }}
-          >
-            {/* Top row: placeholder-like input */}
-            <textarea
-              className="chatlike-input"
-              placeholder={generationMode === 'image' ? 'Describe an image to generate...' : (mode === 'chat' ? 'Chat with CubAI…' : 'Ask with page context…')}
-              value={inputValue}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyPress}
-              onPaste={handlePaste}
-              disabled={isLoading}
-              rows="1"
-              style={{
-                background: 'transparent',
-                border: `1px solid #7D8D86`,
-                outline: 'none',
-                color: '#1b1b1b',
-                fontSize: 16,
-                fontWeight: 500,
-                fontFamily: `"Segoe UI", Roboto, "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif`,
-                letterSpacing: 0.2,
-                borderRadius: 8,
-                padding: '8px 10px',
-                backgroundColor: 'rgba(255,255,255,0.6)'
-              }}
-            />
-
-            {/* Bottom row: left icons and right send */}
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                {/* System prompt switcher (slash inside curved square) */}
-                <div style={{ position: 'relative' }} data-trigger="mode">
-                  <button
-                    className="icon-button"
-                    onClick={toggleModeMenu}
-                    disabled={isLoading}
-                    aria-label="Switch system prompt"
-                    title={`Mode: ${mode === 'chat' ? 'Chat' : mode === 'summarize' ? 'Summarize' : 'Explain'}`}
-                    style={{
-                      width: 30, height: 30, display: 'grid', placeItems: 'center',
-                      borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent'
-                    }}
-                  >
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#3E3F29" strokeWidth="1.8" strokeLinecap="round">
-                      <rect x="5" y="5" width="14" height="14" rx="3" />
-                      <path d="M9 15l6-6" />
-                    </svg>
-                  </button>
-                  {showModeMenu && (
-                    <div
-                      data-menu="mode"
-                      style={{
-                        position: 'absolute',
-                        bottom: 38,
-                        left: 0,
-                        background: 'rgba(20,20,21,0.98)',
-                        border: '1px solid rgba(255,255,255,0.12)',
-                        borderRadius: 10,
-                        boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
-                        padding: 6,
-                        minWidth: 160,
-                        zIndex: 5
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        className="menu-item"
-                        onClick={() => selectMode('summarize')}
-                        style={{
-                          display: 'flex', width: '100%', alignItems: 'center', gap: 8,
-                          background: 'transparent', color: '#e5e7eb', border: 'none',
-                          padding: '8px 10px', borderRadius: 8, cursor: 'pointer'
-                        }}
-                      >
-                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='summarize' ? '#43cea2' : '#6b7280' }} />
-                        Summarize (with context)
-                      </button>
-                      <button
-                        className="menu-item"
-                        onClick={() => selectMode('explain')}
-                        style={{
-                          display: 'flex', width: '100%', alignItems: 'center', gap: 8,
-                          background: 'transparent', color: '#e5e7eb', border: 'none',
-                          padding: '8px 10px', borderRadius: 8, cursor: 'pointer'
-                        }}
-                      >
-                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='explain' ? '#43cea2' : '#6b7280' }} />
-                        Explain (with context)
-                      </button>
-                      <button
-                        className="menu-item"
-                        onClick={() => selectMode('chat')}
-                        style={{
-                          display: 'flex', width: '100%', alignItems: 'center', gap: 8,
-                          background: 'transparent', color: '#e5e7eb', border: 'none',
-                          padding: '8px 10px', borderRadius: 8, cursor: 'pointer'
-                        }}
-                      >
-                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='chat' ? '#43cea2' : '#6b7280' }} />
-                        Chat (no context)
-                      </button>
-                      <button
-                        className="menu-item"
-                        onClick={() => selectMode('Tutor')}
-                        style={{
-                          display: 'flex', width: '100%', alignItems: 'center', gap: 8,
-                          background: 'transparent', color: '#e5e7eb', border: 'none',
-                          padding: '8px 10px', borderRadius: 8, cursor: 'pointer'
-                        }}
-                      >
-                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: mode==='Tutor' ? '#43cea2' : '#6b7280' }} />
-                        Tutor (PCM problems)
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Add page context (tabs drop-up) + Screenshot + Model selector to the right */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {/* Add page context (tabs drop-up) */}
-                  <div style={{ position: 'relative' }} data-trigger="tabs">
-                    <button
-                      className="icon-button"
-                      onClick={toggleTabsMenu}
-                      disabled={isLoading}
-                      aria-label="Add page context"
-                      title="Add page context"
-                      style={{ width: 30, height: 30, display: 'grid', placeItems: 'center', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent' }}
-                    >
-                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#3E3F29" strokeWidth="1.8" strokeLinecap="round">
-                        <path d="M7 12h10" />
-                        <path d="M12 7v10" />
-                      </svg>
-                    </button>
-                    {showTabsMenu && (
-                      <div
-                        data-menu="tabs"
-                        style={{
-                          position: 'absolute',
-                          bottom: 38,
-                          left: 0,
-                          background: 'rgba(20,20,21,0.98)',
-                          border: '1px solid rgba(255,255,255,0.12)',
-                          borderRadius: 10,
-                          boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
-                          padding: 6,
-                          minWidth: 240,
-                          maxHeight: 260,
-                          overflowY: 'auto',
-                          zIndex: 5
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {(availableTabs && availableTabs.length ? availableTabs : []).map(t => (
-                          <button
-                            key={t.id}
-                            className="menu-item"
-                            onClick={() => addTabContext(t.id)}
-                            style={{
-                              display: 'flex', width: '100%', alignItems: 'center', gap: 8,
-                              background: 'transparent', color: '#e5e7eb', border: 'none',
-                              padding: '8px 10px', borderRadius: 8, cursor: 'pointer', textAlign: 'left'
-                            }}
-                            title={t.title || t.url}
-                          >
-                            {/* Favicon (falls back to globe outline if not available) */}
-                            {t.favIconUrl ? (
-                              <img
-                                src={t.favIconUrl}
-                                alt=""
-                                style={{ width: 18, height: 18, borderRadius: 4, objectFit: 'cover', background: '#1f2937' }}
-                                onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.nextSibling.style.display = 'inline-grid'; }}
-                              />
-                            ) : null}
-                            <span
-                              style={{
-                                width: 18,
-                                height: 18,
-                                borderRadius: 4,
-                                display: t.favIconUrl ? 'none' : 'inline-grid',
-                                placeItems: 'center',
-                                background: 'transparent',
-                                border: '1px solid rgba(255,255,255,0.25)'
-                              }}
-                            >
-                              <svg
-                                viewBox="0 0 24 24"
-                                width="14"
-                                height="14"
-                                fill="none"
-                                stroke="#9ca3af"
-                                strokeWidth="1.5"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              >
-                                <circle cx="12" cy="12" r="9" />
-                                <path d="M3 12h18" />
-                                <path d="M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18" />
-                              </svg>
-                            </span>
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {t.title || t.url}
-                            </span>
-                          </button>
-                        ))}
-                        {(!availableTabs || availableTabs.length === 0) && (
-                          <div style={{ color: '#9ca3af', padding: '8px 10px' }}>No tabs available</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Screenshot icon - left of model selector */}
-                  <div style={{ position: 'relative' }}>
-                    <button
-                      className="icon-button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        try { console.log('[UI] Screenshot button clicked'); } catch {}
-                        handleCaptureFullPage();
-                      }}
-                      disabled={isLoading}
-                      aria-label="Capture page screenshot"
-                      title="Attach full-page screenshot"
-                      style={{ width: 30, height: 30, display: 'grid', placeItems: 'center', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent' }}
-                    >
-                      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#3E3F29" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="6" width="18" height="12" rx="2" />
-                        <circle cx="9" cy="12" r="2.2" />
-                        <path d="M3 9h4l2-2h6l2 2h4" />
-                      </svg>
-                    </button>
-                  </div>
-
-                  {/* Image Generation Icon */}
-                  <div style={{ position: 'relative' }}>
-                    <button
-                      className="icon-button"
-                      onClick={toggleGenerationMode}
-                      disabled={isLoading}
-                      aria-label="Toggle Image Generation Mode"
-                      title="Toggle Image Generation Mode"
-                      style={{
-                        width: 30, height: 30, display: 'grid', placeItems: 'center',
-                        borderRadius: 8,
-                        background: generationMode === 'image' ? 'rgba(168, 85, 247, 0.2)' : 'transparent',
-                        border: '1px solid',
-                        borderColor: generationMode === 'image' ? '#A855F7' : 'rgba(255,255,255,0.2)',
-                        transition: 'background-color 0.2s, border-color 0.2s',
-                      }}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3E3F29" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-image"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
-                    </button>
-                  </div>
- 
-                  {/* Model selector (drop-up) */}
-                  <div style={{ position: 'relative' }} data-trigger="model">
-                    <button
-                      className="icon-button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowTabsMenu(false);
-                        setShowModeMenu(false);
-                        setShowModelMenu(v => !v);
-                        try { console.log('[ModelSelector] Toggle menu. Now:', !showModelMenu); } catch {}
-                      }}
-                      disabled={isLoading}
-                      aria-label="Select model"
-                      title={`Model: ${selectedModel}`}
-                      style={{ height: 30, display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent', padding: '0 8px' }}
-                    >
-                      <span style={{ fontSize: 12, color: '#3E3F29', fontWeight: 600 }}>
-                        {selectedModel === 'gemini-2.5-flash-lite' ? 'G2 Flash Lite' : 'G2 Flash'}
-                      </span>
-                      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#3E3F29" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M6 9l6 6 6-6" />
-                      </svg>
-                    </button>
-                    {showModelMenu && (
-                      <div
-                        data-menu="model"
-                        style={{
-                          position: 'absolute',
-                          bottom: 38,
-                          left: 0,
-                          background: 'rgba(20,20,21,0.98)',
-                          border: '1px solid rgba(255,255,255,0.12)',
-                          borderRadius: 10,
-                          boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
-                          padding: 6,
-                          minWidth: 200,
-                          zIndex: 5
-                        }}
-                        // Use mouse down so outside-capture doesn't pre-close before click runs
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          className="menu-item"
-                          onMouseDown={(e) => { e.stopPropagation(); }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            try { console.log('[ModelSelector] Select gemini-2.5-flash'); } catch {}
-                            setSelectedModel('gemini-2.5-flash');
-                            setShowModelMenu(false);
-                          }}
-                          style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
-                        >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash' ? '#43cea2' : '#6b7280' }} />
-                          gemini-2.5-flash
-                        </button>
-                        <button
-                          className="menu-item"
-                          onMouseDown={(e) => { e.stopPropagation(); }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            try { console.log('[ModelSelector] Select gemini-2.5-flash-lite'); } catch {}
-                            setSelectedModel('gemini-2.5-flash-lite');
-                            setShowModelMenu(false);
-                          }}
-                          style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
-                        >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash-lite' ? '#43cea2' : '#6b7280' }} />
-                          gemini-2.5-flash-lite
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ marginLeft: 'auto' }}>
-                <button
-                  className="send-fab"
-                  onClick={handleSend}
-                  disabled={isLoading || (!inputValue.trim() && !capturedImage)}
-                  aria-label="Send"
-                >
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M4 12l15-7-7 15-2-6-6-2z" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <Header clearChat={chatState.clearChat} />
+      <MessageList messages={chatState.messages} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} />
+      <InputForm
+        inputValue={chatState.inputValue}
+        handleInputChange={handleInputChange}
+        handleKeyPress={handleKeyPress}
+        handlePaste={handlePaste}
+        isLoading={chatState.isLoading}
+        generationMode={uiState.generationMode}
+        mode={uiState.mode}
+        handleSend={handleSend}
+        toggleModeMenu={uiState.toggleModeMenu}
+        showModeMenu={uiState.showModeMenu}
+        selectMode={uiState.selectMode}
+        toggleTabsMenu={uiState.toggleTabsMenu}
+        showTabsMenu={uiState.showTabsMenu}
+        availableTabs={uiState.availableTabs}
+        addTabContext={addTabContext}
+        handleCaptureFullPage={handleCaptureFullPage}
+        toggleGenerationMode={uiState.toggleGenerationMode}
+        selectedModel={uiState.selectedModel}
+        showModelMenu={uiState.showModelMenu}
+        setShowModelMenu={uiState.setShowModelMenu}
+        setSelectedModel={uiState.onSelectModel}
+        capturedImage={chatState.capturedImage}
+        capturedSlices={chatState.capturedSlices}
+        captureMeta={chatState.captureMeta}
+        setCapturedImage={chatState.setCapturedImage}
+        setCapturedSlices={chatState.setCapturedSlices}
+        setCaptureMeta={chatState.setCaptureMeta}
+        contextPreview={contextState.contextPreview}
+        setContextPreview={contextState.setContextPreview}
+      />
+      {chatState.isLoading && <div className="loading-message">Loading...</div>}
+      {chatState.error && <div className="message error-message">{chatState.error}</div>}
     </div>
   );
-}
- 
- export default App;
+};
+
+export default App;

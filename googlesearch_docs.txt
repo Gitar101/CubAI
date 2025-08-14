@@ -1,0 +1,73 @@
+import { GoogleGenAI } from '@google/genai';
+
+// Initialize Vertex with your Cloud project and location
+const ai = new GoogleGenAI({
+  vertexai: true,
+  project: 'valiant-realm-417807',
+  location: 'global'
+});
+const model = 'gemini-2.5-flash';
+
+const tools = [
+];
+
+// Set up generation config
+const generationConfig = {
+  maxOutputTokens: 65535,
+  temperature: 1,
+  topP: 1,
+  seed: 0,
+  safetySettings: [
+    {
+      category: 'HARM_CATEGORY_HATE_SPEECH',
+      threshold: 'OFF',
+    },
+    {
+      category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+      threshold: 'OFF',
+    },
+    {
+      category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+      threshold: 'OFF',
+    },
+    {
+      category: 'HARM_CATEGORY_HARASSMENT',
+      threshold: 'OFF',
+    }
+  ],
+  tools: tools,
+};
+
+const msg1Document1 = {
+  inlineData: {
+    mimeType: 'text/plain',
+    data: `ewogICJ3aXJlTWFnaWMiOiAicGIzIiwKICAicGVucyI6IFsgewogIAogIH0gXSwKICAid3NXaW5TdHlsZXMiOiBbIHsKICAKICB9IF0sCiAgIndwV2luUG9zaXRpb25zIjogWyB7CiAgCiAgfSBdLAogICJldmVudHMiOiBbIHsKICAgICJ0U3RhcnRNcyI6IDM5MCwKICAgICJkRHVyYXRpb25NcyI6IDIwMDAsCiAgICAic2VncyI6IFsgewogICAgICAidXRmOCI6ICJIZXksIFZzYXVjZS4gTWljaGFlbCBoZXJlLiIKICAgIH0gXQogIH0sIHsKICAgICJ0U3RhcnRNcyI6IDIzOTAsCiAgICAiZER1cmF0aW9uTXMiOiA3OTMwLAogICAgInNlZ3MiOiBbIHsKICAgICAgInV0ZjgiOiAiR3Jhdml0eSBpcyBhIHByb3BlcnR5IG9mIG1hdHRlciwgYW55dGhpbmdcbndpd`
+  }
+};
+
+const chat = ai.chats.create({
+  model: model,
+  config: generationConfig
+});
+
+async function sendMessage(message) {
+  const response = await chat.sendMessageStream({
+    message: message
+  });
+  process.stdout.write('stream result: ');
+  for await (const chunk of response) {
+    if (chunk.text) {
+      process.stdout.write(chunk.text);
+    } else {
+      process.stdout.write(JSON.stringify(chunk) + '\n');
+    }
+  }
+}
+
+async function generateContent() {
+  await sendMessage([
+    {text: `asdasd`}, msg1Document1
+  ]);
+}
+
+generateContent();
