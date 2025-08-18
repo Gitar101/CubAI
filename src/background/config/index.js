@@ -5,6 +5,10 @@ export const GEMINI_API_KEY = (typeof import.meta !== 'undefined' && import.meta
   ? import.meta.env.VITE_GEMINI_API_KEY
   : undefined;
 
+export const GROQ_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GROQ_API_KEY)
+  ? import.meta.env.VITE_GROQ_API_KEY
+  : undefined;
+
 // Define the grounding tool for Gemini API
 export const groundingTool = {
   googleSearch: {},

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -30,7 +30,7 @@ const App = () => {
     chatState.setMessages,
     chatState.setMessageIdCounter,
     chatState.setError,
-    chatState.messageIdCounter
+    chatState.messageIdCounter,
   );
 
   const handleSend = () => {
@@ -110,14 +110,24 @@ const App = () => {
 
     const newUserMessage = { id: chatState.messageIdCounter, role: 'user', content, contexts: contextState.contexts };
 
+    const newAiMessageId = chatState.messageIdCounter + 1;
     const newAiMessage = {
-      id: chatState.messageIdCounter + 1,
+      id: newAiMessageId,
       role: 'ai',
       content: [{ type: 'text', text: '' }],
+      reasoning: '', // Initialize reasoning for the new message
     };
 
-    chatState.setMessages(prev => [...prev, newUserMessage, newAiMessage]);
-    chatState.setMessageIdCounter(prev => prev + 2);
+    // Only add the new AI message placeholder if it's not the gpt-oss-120b model
+    // The gpt-oss-120b model handles its own message container creation via startAIStream
+    if (uiState.selectedModel !== "openai/gpt-oss-120b") {
+      chatState.setMessages(prev => [...prev, newUserMessage, newAiMessage]);
+      chatState.setMessageIdCounter(prev => prev + 2);
+    } else {
+      // For gpt-oss-120b, only add the user message and increment counter by 1
+      chatState.setMessages(prev => [...prev, newUserMessage]);
+      chatState.setMessageIdCounter(prev => prev + 1);
+    }
     chatState.setIsLoading(true);
 
     chatState.setInputValue('');
@@ -145,8 +155,10 @@ const App = () => {
         systemInstruction: systemPrompts[uiState.mode],
         systemContext: includeCtx ? systemCtxForSend : null,
         model: uiState.selectedModel,
+        selectedModel: uiState.selectedModel,
         file: null,
-        useGoogleSearch: useGoogleSearch
+        useGoogleSearch: useGoogleSearch,
+        messageId: newAiMessageId, // Pass the ID of the AI message to update
       });
     };
 
@@ -220,7 +232,7 @@ const App = () => {
     }
   };
 
-  const handleCaptureFullPage = async () => {
+  const handleCaptureFullPage = useCallback(async () => {
     const dbg = (msg, extra) => { try { console.log('[CaptureFullPage]', msg, extra ?? ''); } catch {} };
     try {
       chatState.setError('');
@@ -264,7 +276,7 @@ const App = () => {
       dbg('Exception thrown', e);
       chatState.setError(String(e?.message || e));
     }
-  };
+  }, [chatState.setError, chatState.setCapturedImage, chatState.setCapturedSlices, chatState.setCaptureMeta]);
 
   const addTabContext = (tabId) => {
     try {
@@ -302,7 +314,12 @@ const App = () => {
   return (
     <div className="app-container" style={{ position: 'relative', minHeight: '100vh', backgroundColor: '#BCA88D' }}>
       <Header clearChat={chatState.clearChat} />
-      <MessageList messages={chatState.messages} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} />
+      <MessageList
+        messages={chatState.messages}
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        isStreaming={chatState.isStreaming}
+      />
       <InputForm
         inputValue={chatState.inputValue}
         handleInputChange={handleInputChange}
@@ -317,6 +334,7 @@ const App = () => {
         selectMode={uiState.selectMode}
         toggleTabsMenu={uiState.toggleTabsMenu}
         showTabsMenu={uiState.showTabsMenu}
+        setShowTabsMenu={uiState.setShowTabsMenu}
         availableTabs={uiState.availableTabs}
         addTabContext={addTabContext}
         handleCaptureFullPage={handleCaptureFullPage}
@@ -324,6 +342,7 @@ const App = () => {
         selectedModel={uiState.selectedModel}
         showModelMenu={uiState.showModelMenu}
         setShowModelMenu={uiState.setShowModelMenu}
+        setShowModeMenu={uiState.setShowModeMenu}
         setSelectedModel={uiState.onSelectModel}
         capturedImage={chatState.capturedImage}
         capturedSlices={chatState.capturedSlices}

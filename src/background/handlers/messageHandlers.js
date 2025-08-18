@@ -1,6 +1,8 @@
 // Message handlers for runtime messages
 
 import { callGeminiTool, callGeminiUserMemoryTool, about_user_read, about_user_write, run, uploadFile } from '../api/gemini.js';
+import { invokeChuteGLM } from '../api/chutes.js';
+import { runGroq } from '../api/groq.js';
 import { defaultGenerationConfig } from '../config/index.js';
 import { getSummarizeState } from './contextMenus.js';
 import { readUserMemory } from '../utils/userMemory.js';
@@ -229,11 +231,29 @@ async function handleSendChatMessage(message, sender, sendResponse) {
   try {
     // First Call (for General Response and Grounding)
     // Get the selected model from the message or default to gemini-2.5-flash
-    let modelName = message.mode?.model || "gemini-2.5-flash";
+    let modelToUse = message.selectedModel; // This will be uiState.selectedModel from App.jsx
+
     if (message.mode === "Image Generation Mode") {
-      modelName = "gemini-1.5-flash";
+      modelToUse = "gemini-1.5-flash"; // Override for image generation
     }
-    const assistantResponse = await run(finalContents, defaultGenerationConfig, systemInstruction, modelName, message.mode);
+
+    let assistantResponse;
+    const groqModels = [
+      "deepseek-r1-distill-llama-70b",
+      "meta-llama/llama-4-maverick-17b-128e-instruct",
+      "llama-3.3-70b-versatile",
+      "openai/gpt-oss-120b"
+    ];
+
+    if (modelToUse === 'chutes-glm-4.5-air') {
+      assistantResponse = await invokeChuteGLM(finalContents);
+      assistantResponse = assistantResponse.text;
+    } else if (groqModels.includes(modelToUse)) {
+      assistantResponse = await runGroq(finalContents, defaultGenerationConfig, systemInstruction, modelToUse, message.mode, message.messageId);
+    }
+    else {
+      assistantResponse = await run(finalContents, defaultGenerationConfig, systemInstruction, modelToUse, message.mode);
+    }
 
     // Second Call (for User Memory) - After the response is complete
     console.log("Using gemini-1.5-flash for user memory processing after response completion.");

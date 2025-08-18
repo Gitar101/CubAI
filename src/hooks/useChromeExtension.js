@@ -8,8 +8,7 @@ export const useChromeExtension = (
   setIsLoading,
   setMessages,
   setMessageIdCounter,
-  setError,
-  messageIdCounter
+  setError
 ) => {
   useEffect(() => {
     if (chrome.runtime && chrome.runtime.onMessage) {
@@ -25,18 +24,30 @@ export const useChromeExtension = (
             if (message.tabMeta) updateContextPreview(message.tabMeta);
           }
         } else if (message.action === "startAIStream") {
+          console.log("[useChromeExtension] Received startAIStream");
           setIsLoading(true);
           isStreamingRef.current = true;
+          // Create a new AI message with empty content and reasoning to stream into
+          setMessages(prevMessages => {
+            const newAiMessage = {
+              id: message.messageId, // Use the ID sent from background
+              role: 'ai',
+              content: [{ type: 'text', text: '' }],
+              reasoning: '', // Initialize reasoning
+            };
+            return [...prevMessages, newAiMessage];
+          });
         } else if (message.action === "appendAIMessageChunk") {
           const textChunk = message.text || '';
           if (!textChunk) return;
+          console.log("[useChromeExtension] Received appendAIMessageChunk:", textChunk);
           setMessages(prevMessages => {
-            const lastMessage = prevMessages.length > 0 ? prevMessages[prevMessages.length - 1] : null;
+            const updatedMessages = [...prevMessages];
+            const lastMessageIndex = updatedMessages.length - 1;
+            const lastMessage = updatedMessages[lastMessageIndex];
 
             if (lastMessage && lastMessage.role === 'ai' && isStreamingRef.current) {
-              const updatedMessages = [...prevMessages];
-              const updatedLastMessage = { ...lastMessage };
-              const content = Array.isArray(updatedLastMessage.content) ? [...updatedLastMessage.content] : [];
+              const content = Array.isArray(lastMessage.content) ? [...lastMessage.content] : [];
               let textContentIndex = content.findIndex(c => c.type === 'text');
 
               if (textContentIndex !== -1) {
@@ -45,23 +56,34 @@ export const useChromeExtension = (
                 content.push({ type: 'text', text: textChunk });
               }
               
-              updatedLastMessage.content = content;
-              updatedMessages[prevMessages.length - 1] = updatedLastMessage;
+              updatedMessages[lastMessageIndex] = { ...lastMessage, content };
               return updatedMessages;
-            } else if (isStreamingRef.current) {
-              const newAiMessage = {
-                id: messageIdCounter,
-                role: 'ai',
-                content: [{ type: 'text', text: textChunk }],
-              };
-              setMessageIdCounter(c => c + 1);
-              return [...prevMessages, newAiMessage];
             }
             return prevMessages;
           });
         } else if (message.action === "endAIStream") {
+          console.log("[useChromeExtension] Received endAIStream");
           isStreamingRef.current = false;
           setIsLoading(false);
+        } else if (message.action === "appendReasoningChunk") {
+          console.log("[useChromeExtension] Received appendReasoningChunk:", message.text);
+          setMessages(prevMessages => {
+            const updatedMessages = [...prevMessages];
+            const lastMessageIndex = updatedMessages.length - 1;
+            const lastMessage = updatedMessages[lastMessageIndex];
+
+            if (lastMessage && lastMessage.role === 'ai' && isStreamingRef.current) {
+              updatedMessages[lastMessageIndex] = {
+                ...lastMessage,
+                reasoning: (lastMessage.reasoning || '') + (message.text || ''),
+              };
+              return updatedMessages;
+            }
+            return prevMessages;
+          });
+        } else if (message.action === "endReasoningStream") {
+          console.log("[useChromeExtension] Received endReasoningStream");
+          // No specific action needed here, as reasoning is part of the message object
         } else if (message.action === "appendSystemContext") {
           setSystemContext(message.text || '');
         } else if (message.action === "setContextPreview") {
@@ -75,6 +97,7 @@ export const useChromeExtension = (
             tabId: p.id
           });
         } else if (message.action === "displayError") {
+          console.error("[useChromeExtension] Received displayError:", message.error);
           setError(message.error);
           setIsLoading(false);
         } else if (message.action === 'displayGeneratedImage') {
@@ -99,5 +122,5 @@ export const useChromeExtension = (
       chrome.runtime.onMessage.addListener(listener);
       return () => chrome.runtime.onMessage.removeListener(listener);
     }
-  }, [messageIdCounter]);
+  }, [setMessageIdCounter]); // Removed setThinkingText, setIsThinkingStreaming
 };

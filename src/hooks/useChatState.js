@@ -15,7 +15,6 @@ export const useChatState = () => {
   const [summary, setSummary] = useState('');
   const [contexts, setContexts] = useState([]);
   const [isContextVisible, setIsContextVisible] = useState(true);
-
   const clearChat = () => {
     setMessages([]);
     setMessageIdCounter(0);

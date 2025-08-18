@@ -15,6 +15,7 @@ const InputForm = ({
   selectMode,
   toggleTabsMenu,
   showTabsMenu,
+  setShowTabsMenu,
   availableTabs,
   addTabContext,
   handleCaptureFullPage,
@@ -22,6 +23,7 @@ const InputForm = ({
   selectedModel,
   showModelMenu,
   setShowModelMenu,
+  setShowModeMenu,
   setSelectedModel,
   capturedImage,
   capturedSlices,
@@ -37,6 +39,7 @@ const InputForm = ({
       className="floating-input-bar"
       style={{ position: 'fixed', left: 0, right: 0, bottom: 16, display: 'flex', justifyContent: 'center', zIndex: 2 }}
       onClick={(e) => {
+        console.log('[InputForm] Outer div clicked');
         e.stopPropagation?.();
       }}
     >
@@ -63,7 +66,7 @@ const InputForm = ({
             onClick={(e) => e.stopPropagation()}
           >
             {capturedImage && (
-              <div style={{ width: 58, height: 38, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.2)', background: '#111317' }}>
+              <div style={{ width: 58, height: 38, borderRadius: 6, overflow: 'hidden', background: '#111317' }}>
                 <img
                   src={capturedImage}
                   alt="Page capture preview"
@@ -327,7 +330,7 @@ const InputForm = ({
                     className="icon-button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      try { console.log('[UI] Screenshot button clicked'); } catch {}
+                      console.log('[UI] Screenshot button clicked');
                       handleCaptureFullPage();
                     }}
                     disabled={isLoading}
@@ -366,10 +369,14 @@ const InputForm = ({
                     className="icon-button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowTabsMenu(false);
-                      setShowModeMenu(false);
-                      setShowModelMenu(v => !v);
-                      try { console.log('[ModelSelector] Toggle menu. Now:', !showModelMenu); } catch {}
+                      console.log('[ModelSelector] Button clicked');
+                      // Removed setShowModeMenu(false) from here as it's handled by toggleModeMenu
+                      if (typeof setShowModelMenu === 'function') {
+                        setShowModelMenu(!showModelMenu); // Simplified state update
+                      } else {
+                        console.error('[ModelSelector] setShowModelMenu is not a function:', setShowModelMenu);
+                      }
+                      console.log('[ModelSelector] Toggle menu. Now:', !showModelMenu);
                     }}
                     disabled={isLoading}
                     aria-label="Select model"
@@ -377,59 +384,131 @@ const InputForm = ({
                     style={{ height: 30, display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent', padding: '0 8px' }}
                   >
                     <span style={{ fontSize: 12, color: '#3E3F29', fontWeight: 600 }}>
-                      {selectedModel === 'gemini-2.5-flash-lite' ? 'G2 Flash Lite' : 'G2 Flash'}
+                      {selectedModel === 'gemini-2.5-flash-lite' ? 'G2 Flash Lite' : selectedModel === 'chutes-glm-4.5-air' ? 'GLM 4.5 Air' : 'G2 Flash'}
                     </span>
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#3E3F29" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M6 9l6 6 6-6" />
                     </svg>
                   </button>
                   {showModelMenu && (
-                    <div
-                      data-menu="model"
-                      style={{
-                        position: 'absolute',
-                        bottom: 38,
-                        left: 0,
-                        background: 'rgba(20,20,21,0.98)',
-                        border: '1px solid rgba(255,255,255,0.12)',
-                        borderRadius: 10,
-                        boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
-                        padding: 6,
-                        minWidth: 200,
-                        zIndex: 5
-                      }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <button
-                        className="menu-item"
-                        onMouseDown={(e) => { e.stopPropagation(); }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          try { console.log('[ModelSelector] Select gemini-2.5-flash'); } catch {}
-                          setSelectedModel('gemini-2.5-flash');
-                          setShowModelMenu(false);
+                    <React.Fragment>
+                      <div
+                        data-menu="model"
+                        style={{
+                          position: 'absolute',
+                          bottom: 38,
+                          left: 0,
+                          background: 'rgba(20,20,21,0.98)',
+                          border: '1px solid rgba(255,255,255,0.12)',
+                          borderRadius: 10,
+                          boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
+                          padding: 6,
+                          minWidth: 200,
+                          zIndex: 5
                         }}
-                        style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash' ? '#43cea2' : '#6b7280' }} />
-                        gemini-2.5-flash
-                      </button>
-                      <button
-                        className="menu-item"
-                        onMouseDown={(e) => { e.stopPropagation(); }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          try { console.log('[ModelSelector] Select gemini-2.5-flash-lite'); } catch {}
-                          setSelectedModel('gemini-2.5-flash-lite');
-                          setShowModelMenu(false);
-                        }}
-                        style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
-                      >
-                        <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash-lite' ? '#43cea2' : '#6b7280' }} />
-                        gemini-2.5-flash-lite
-                      </button>
-                    </div>
+                        <button
+                          className="menu-item"
+                          onMouseDown={(e) => { e.stopPropagation(); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try { console.log('[ModelSelector] Select gemini-2.5-flash'); } catch {}
+                            setSelectedModel('gemini-2.5-flash');
+                            setShowModelMenu(false);
+                          }}
+                          style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash' ? '#43cea2' : '#6b7280' }} />
+                          gemini-2.5-flash
+                        </button>
+                        <button
+                          className="menu-item"
+                          onMouseDown={(e) => { e.stopPropagation(); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try { console.log('[ModelSelector] Select gemini-2.5-flash-lite'); } catch {}
+                            setSelectedModel('gemini-2.5-flash-lite');
+                            setShowModelMenu(false);
+                          }}
+                          style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash-lite' ? '#43cea2' : '#6b7280' }} />
+                          gemini-2.5-flash-lite
+                        </button>
+                        <button
+                          className="menu-item"
+                          onMouseDown={(e) => { e.stopPropagation(); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try { console.log('[ModelSelector] Select chutes-glm-4.5-air'); } catch {}
+                            setSelectedModel('chutes-glm-4.5-air');
+                            setShowModelMenu(false);
+                          }}
+                          style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='chutes-glm-4.5-air' ? '#43cea2' : '#6b7280' }} />
+                          zai-org/GLM-4.5-Air
+                        </button>
+                        <button
+                          className="menu-item"
+                          onMouseDown={(e) => { e.stopPropagation(); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try { console.log('[ModelSelector] Select deepseek-r1-distill-llama-70b'); } catch {}
+                            setSelectedModel('deepseek-r1-distill-llama-70b');
+                            setShowModelMenu(false);
+                          }}
+                          style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='deepseek-r1-distill-llama-70b' ? '#43cea2' : '#6b7280' }} />
+                          deepseek-r1-distill-llama-70b
+                        </button>
+                        <button
+                          className="menu-item"
+                          onMouseDown={(e) => { e.stopPropagation(); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try { console.log('[ModelSelector] Select meta-llama/llama-4-maverick-17b-128e-instruct'); } catch {}
+                            setSelectedModel('meta-llama/llama-4-maverick-17b-128e-instruct');
+                            setShowModelMenu(false);
+                          }}
+                          style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='meta-llama/llama-4-maverick-17b-128e-instruct' ? '#43cea2' : '#6b7280' }} />
+                          meta-llama/llama-4-maverick-17b-128e-instruct
+                        </button>
+                        <button
+                          className="menu-item"
+                          onMouseDown={(e) => { e.stopPropagation(); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try { console.log('[ModelSelector] Select llama-3.3-70b-versatile'); } catch {}
+                            setSelectedModel('llama-3.3-70b-versatile');
+                            setShowModelMenu(false);
+                          }}
+                          style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='llama-3.3-70b-versatile' ? '#43cea2' : '#6b7280' }} />
+                          llama-3.3-70b-versatile
+                        </button>
+                        <button
+                          className="menu-item"
+                          onMouseDown={(e) => { e.stopPropagation(); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try { console.log('[ModelSelector] Select openai/gpt-oss-120b'); } catch {}
+                            setSelectedModel('openai/gpt-oss-120b');
+                            setShowModelMenu(false);
+                          }}
+                          style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
+                        >
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='openai/gpt-oss-120b' ? '#43cea2' : '#6b7280' }} />
+                          openai/gpt-oss-120b
+                        </button>
+                      </div>
+                    </React.Fragment>
                   )}
                 </div>
               </div>

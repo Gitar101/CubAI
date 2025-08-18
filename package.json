@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "groq-sdk": "^0.10.0",
     "@react-three/fiber": "^8.16.0",
     "@react-three/postprocessing": "^2.16.2",
     "@types/gsap": "^1.20.2",
@@ -26,7 +27,8 @@
     "subtitles-parser-vtt": "^0.1.0",
     "three": "^0.159.0",
     "youtube-caption-extractor": "^1.8.2",
-    "youtube-caption-scraper": "^1.0.0"
+    "youtube-caption-scraper": "^1.0.0",
+    "lucide-react": "^0.469.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
