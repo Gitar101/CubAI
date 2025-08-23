@@ -12,15 +12,35 @@ const CodeBlock = ({ language, code }) => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const openHtmlInNewTab = (htmlContent) => {
-    // Create a data URI with the HTML content
-    // This avoids CSP issues since we're not executing scripts in the extension context
-    const encodedHtml = encodeURIComponent(htmlContent);
-    const dataUrl = `data:text/html;charset=utf-8,${encodedHtml}`;
-    
-    // Open in a new tab
-    chrome.tabs.create({ url: dataUrl });
-  };
+const openHtmlInNewTab = (htmlContent) => {
+  const baseTag = '<base href="/" />'; // Add base tag to resolve relative paths
+
+  let modifiedHtmlContent = htmlContent;
+
+  // Inject base tag right after the opening <head> tag, or <body>, or prepend
+  if (modifiedHtmlContent.includes('<head')) {
+    modifiedHtmlContent = modifiedHtmlContent.replace(/<head[^>]*>/i, (match) => {
+      return `${match}\n${baseTag}`;
+    });
+  } else if (modifiedHtmlContent.includes('<body')) {
+    modifiedHtmlContent = modifiedHtmlContent.replace(/<body[^>]*>/i, (match) => {
+      return `${match}\n${baseTag}`;
+    });
+  } else {
+    modifiedHtmlContent = `${baseTag}\n${modifiedHtmlContent}`;
+  }
+
+  // Wrap inline script content in window.onload to ensure external libraries are loaded
+  modifiedHtmlContent = modifiedHtmlContent.replace(/<script(?![^>]*src=["'][^"']*["'])(?![^>]*type=["']module["'])[^>]*>(.*?)<\/script>/gis, (match, content) => {
+    // Only wrap if it's an inline script and not already a module
+    return `<script>window.onload = function() { ${content} };</script>`;
+  });
+
+  const encodedHtml = encodeURIComponent(modifiedHtmlContent);
+  const dataUrl = `data:text/html;charset=utf-8,${encodedHtml}`;
+
+  chrome.tabs.create({ url: dataUrl });
+};
 
   return (
     <div className="relative rounded-md overflow-hidden my-4 text-sm md:text-base border-2 border-[#8B7B6B]">

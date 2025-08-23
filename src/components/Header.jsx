@@ -1,5 +1,4 @@
 import React from 'react';
-import ShinyText from './ShinyText';
 import { History } from 'lucide-react';
 
 const Header = ({ clearChat, onHistoryClick }) => {
@@ -26,7 +25,7 @@ const Header = ({ clearChat, onHistoryClick }) => {
           height="28"
           style={{ display: 'block', filter: 'brightness(1) contrast(1)', borderRadius: 6 }}
         />
-        <ShinyText text="CubAI" speed={5} />
+        <span style={{ fontSize: 20, fontWeight: 'bold', color: '#1b1b1b' }}>CubAI</span>
         <div style={{ flex: 1 }} />
         <button
           onClick={onHistoryClick}

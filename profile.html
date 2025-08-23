@@ -3,377 +3,211 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>User Profile Card</title>
+    <title>Gauss's Law Animation (Three.js)</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
-
-        :root {
-            --primary-text-color: #333;
-            --secondary-text-color: #777;
-            --handle-color: #6a82fb;
-            --offline-color: #ffa500;
-            --online-color: #2ecc71; /* Not used in this image, but good to have */
-            --background-light: #f0f2f5;
-            --card-background: #ffffff;
-            --button-background-light: #e0e7ff;
-            --icon-button-background: #f0f2f5;
-            --about-me-gradient-start: #ff6b6b;
-            --about-me-gradient-end: #ffa07a;
-            --mutual-friends-gradient-start: #6a82fb;
-            --mutual-friends-gradient-end: #fc5c7d;
-        }
-
-        body {
-            font-family: 'Poppins', sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: var(--background-light);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            box-sizing: border-box;
-        }
-
-        .profile-card {
-            display: flex;
-            background-color: var(--card-background);
-            border-radius: 20px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
-            width: 900px; /* Adjusted width to match the image proportions */
-            max-width: 95%;
-            overflow: hidden;
-        }
-
-        .left-panel {
-            flex: 0 0 35%; /* Approximately 35% width */
-            padding: 40px 30px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            border-right: 1px solid #eee; /* Subtle separator */
-        }
-
-        .avatar-section {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-
-        .avatar-container {
-            width: 120px;
-            height: 120px;
-            border-radius: 50%;
-            background-image: url('https://i.imgur.com/your-avatar-image.png'); /* Replace with the actual image URL or data URI */
-            background-size: cover;
-            background-position: center;
-            background-color: #ddd; /* Placeholder background */
-            margin: 0 auto 15px;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
-            border: 4px solid #fff; /* White border around avatar */
-            box-sizing: border-box;
-            /* The provided avatar image has a gradient border, which is complex with standard CSS.
-               For simplicity, a solid white border is used. To achieve the exact gradient border,
-               you would typically use SVG or multiple overlaid elements. */
-            position: relative;
-            z-index: 1; /* Ensure it's above other elements if needed */
-        }
-        /* Gradient border simulation for avatar - more complex than standard border */
-        .avatar-container::before {
-            content: '';
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
             position: absolute;
-            top: -5px; bottom: -5px; left: -5px; right: -5px;
-            background: linear-gradient(135deg, #a8c0ff, #3f2b96); /* Example gradient */
-            border-radius: 50%;
-            z-index: -1;
-            padding: 5px;
-            mask: radial-gradient(farthest-side, transparent calc(100% - 4px), black calc(100% - 4px + 1px));
-            -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), black calc(100% - 4px + 1px));
-            /* This is a more advanced technique to simulate a gradient border.
-               For a simpler approach, just use a solid border on .avatar-container. */
-        }
-        /* Revert to simpler avatar if gradient border is too complex */
-        .avatar-container {
-            border: 4px solid transparent; /* Make border transparent for the gradient effect */
-            background-origin: border-box;
-            background-clip: content-box, border-box;
-            background-image: url('https://i.imgur.com/your-avatar-image.png'), linear-gradient(135deg, #a8c0ff, #3f2b96); /* Avatar image, then gradient */
-            background-size: cover, cover;
-            background-position: center, center;
-            background-repeat: no-repeat;
-        }
-
-
-        .username-handle h1 {
-            font-size: 28px;
-            font-weight: 700;
-            color: var(--primary-text-color);
-            margin: 0;
-        }
-
-        .username-handle span {
-            font-size: 16px;
-            color: var(--handle-color);
-            font-weight: 500;
-        }
-
-        .status {
-            display: flex;
-            align-items: center;
-            margin-top: 15px;
-            font-size: 14px;
-            color: var(--secondary-text-color);
-            font-weight: 500;
-        }
-
-        .status::before {
-            content: '';
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 8px;
-        }
-
-        .status.offline::before {
-            background-color: var(--offline-color);
-        }
-
-        .last-seen {
-            font-size: 13px;
-            color: var(--secondary-text-color);
-            margin-top: 10px;
-        }
-
-        .social-links {
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-            margin-top: 30px;
-            margin-bottom: 40px;
-        }
-
-        .icon-button {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background-color: var(--icon-button-background);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            text-decoration: none;
-            color: var(--secondary-text-color);
-            font-size: 18px;
-            transition: background-color 0.2s ease, transform 0.2s ease;
-        }
-
-        .icon-button:hover {
-            background-color: #e0e0e0;
-            transform: translateY(-2px);
-        }
-        /* Placeholder icons - replace with actual SVGs or Font Awesome */
-        .icon-button::before {
-            font-family: 'Poppins', sans-serif; /* Fallback for generic text */
-            font-weight: 600;
-            font-size: 16px;
-        }
-        .icon-button:nth-child(1)::before { content: 'I'; } /* Instagram */
-        .icon-button:nth-child(2)::before { content: 'G'; } /* GitHub */
-        .icon-button:nth-child(3)::before { content: 'Y'; } /* YouTube */
-        .icon-button:nth-child(4)::before { content: 'L'; } /* Link */
-
-        .join-friends-info {
-            display: flex;
-            justify-content: space-around;
-            width: 100%;
-            margin-top: auto; /* Pushes this section to the bottom of the left panel */
-        }
-
-        .info-item {
-            text-align: center;
-        }
-
-        .info-item .value {
-            font-size: 20px;
-            font-weight: 600;
-            color: var(--primary-text-color);
-            display: block;
-        }
-
-        .info-item .label {
-            font-size: 12px;
-            color: var(--secondary-text-color);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .right-panel {
-            flex: 1; /* Takes remaining space */
-            padding: 40px;
-            display: flex;
-            flex-direction: column;
-            gap: 30px;
-        }
-
-        .about-me-section,
-        .mutual-friends-section {
-            background-color: var(--card-background);
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
-            position: relative;
-            overflow: hidden; /* To contain the pseudo-element for gradient */
-        }
-
-        .about-me-section h2,
-        .mutual-friends-section h2 {
-            font-size: 20px;
-            font-weight: 600;
-            color: var(--primary-text-color);
-            margin-top: 0;
-            margin-bottom: 15px;
-            padding-left: 15px; /* Space for the gradient line */
-            position: relative;
-            z-index: 1;
-        }
-
-        .about-me-section h2::before,
-        .mutual-friends-section h2::before {
-            content: '';
-            position: absolute;
-            left: 0;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 5px;
-            height: 80%; /* Height of the gradient line */
-            border-radius: 2px;
-            z-index: 0;
-        }
-
-        .about-me-section h2::before {
-            background: linear-gradient(to bottom, var(--about-me-gradient-start), var(--about-me-gradient-end));
-        }
-
-        .mutual-friends-section h2::before {
-            background: linear-gradient(to bottom, var(--mutual-friends-gradient-start), var(--mutual-friends-gradient-end));
-        }
-
-        .about-me-section p,
-        .mutual-friends-section p {
-            font-size: 15px;
-            color: var(--secondary-text-color);
-            line-height: 1.6;
-            margin-bottom: 20px;
-        }
-
-        .joined-button {
-            background-color: var(--button-background-light);
-            color: var(--handle-color);
-            border: none;
-            padding: 10px 20px;
-            border-radius: 10px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background-color 0.2s ease, transform 0.2s ease;
-        }
-
-        .joined-button:hover {
-            background-color: #d0d7f5;
-            transform: translateY(-1px);
-        }
-
-        /* Responsive adjustments */
-        @media (max-width: 768px) {
-            .profile-card {
-                flex-direction: column;
-                width: 100%;
-                border-radius: 0;
-            }
-
-            .left-panel {
-                border-right: none;
-                border-bottom: 1px solid #eee;
-                padding: 30px 20px;
-            }
-
-            .right-panel {
-                padding: 30px 20px;
-            }
-
-            .avatar-section {
-                margin-bottom: 20px;
-            }
-
-            .social-links {
-                margin-top: 20px;
-                margin-bottom: 30px;
-            }
-
-            .username-handle h1 {
-                font-size: 24px;
-            }
-
-            .username-handle span {
-                font-size: 14px;
-            }
-
-            .status {
-                margin-top: 10px;
-            }
-
-            .last-seen {
-                font-size: 12px;
-            }
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: monospace;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
         }
     </style>
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
 </head>
 <body>
-    <div class="profile-card">
-        <div class="left-panel">
-            <div class="avatar-section">
-                <div class="avatar-container">
-                    <!-- The avatar image is embedded via background-image in CSS for styling flexibility.
-                         To use the image from the prompt, you would typically host it and link it,
-                         or convert it to a data URI.
-                         Example: background-image: url('data:image/png;base64,iVBORw0KG...');
-                         For this example, please ensure 'https://i.imgur.com/your-avatar-image.png' points to the desired image. -->
-                </div>
-                <div class="username-handle">
-                    <h1>gitar</h1>
-                    <span>@gitar</span>
-                </div>
-                <div class="status offline">
-                    <span>Offline</span>
-                </div>
-                <p class="last-seen">• Last seen: Today at 19:59</p>
-            </div>
-            <div class="social-links">
-                <a href="#" class="icon-button" aria-label="Instagram"></a>
-                <a href="#" class="icon-button" aria-label="GitHub"></a>
-                <a href="#" class="icon-button" aria-label="YouTube"></a>
-                <a href="#" class="icon-button" aria-label="Link"></a>
-            </div>
-            <div class="join-friends-info">
-                <div class="info-item">
-                    <span class="value">May 2025</span>
-                    <span class="label">JOINED</span>
-                </div>
-                <div class="info-item">
-                    <span class="value">0</span>
-                    <span class="label">FRIENDS</span>
-                </div>
-            </div>
-        </div>
-        <div class="right-panel">
-            <div class="about-me-section">
-                <h2>ABOUT ME</h2>
-                <p>dev, did a major help in developing KevkoSystems.</p>
-                <button class="joined-button">Joined May 2025</button>
-            </div>
-            <div class="mutual-friends-section">
-                <h2>MUTUAL FRIENDS</h2>
-                <p>No mutual friends to display.</p>
-            </div>
-        </div>
+    <div id="info">
+        <h1>Gauss's Law</h1>
+        <p>Observe the flux through the transparent sphere.</p>
+        <p>When the charge is *inside*, the flux is constant.</p>
+        <p>When the charge is *outside*, the net flux is zero.</p>
+        <p>Current Enclosed Charge: <span id="enclosedCharge"></span></p>
     </div>
+
+    <script>
+        let scene, camera, renderer;
+        let pointCharge, gaussianSphere;
+        let fieldLines = [];
+        let animationPhase = 0; // 0: expand, 1: contract, 2: move out, 3: move back
+        let clock = new THREE.Clock();
+        let gui;
+        let params = {
+            sphereRadius: 1.0,
+            chargeStrength: 1.0,
+            numFieldLines: 20
+        };
+
+        init();
+        animate();
+
+        function init() {
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 5, 10);
+            camera.lookAt(0, 0, 0);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Point Charge (Red sphere)
+            const chargeGeometry = new THREE.SphereGeometry(0.3, 32, 32);
+            const chargeMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            pointCharge = new THREE.Mesh(chargeGeometry, chargeMaterial);
+            scene.add(pointCharge);
+            pointCharge.geometry.computeBoundingSphere(); // Ensure boundingSphere is computed
+
+            // Gaussian Surface (Transparent blue sphere)
+            const gaussianGeometry = new THREE.SphereGeometry(params.sphereRadius, 64, 64);
+            const gaussianMaterial = new THREE.MeshBasicMaterial({
+                color: 0x00ffff,
+                transparent: true,
+                opacity: 0.2,
+                side: THREE.DoubleSide
+            });
+            gaussianSphere = new THREE.Mesh(gaussianGeometry, gaussianMaterial);
+            scene.add(gaussianSphere);
+
+            // Electric Field Lines
+            createFieldLines();
+
+            // Lights (optional, but good for shading)
+            const ambientLight = new THREE.AmbientLight(0x404040); // Soft white light
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            directionalLight.position.set(1, 1, 1);
+            scene.add(directionalLight);
+
+            // GUI for parameters
+            gui = new dat.GUI();
+            gui.add(params, 'chargeStrength', 0.1, 2.0).name('Charge Strength');
+            gui.add(params, 'numFieldLines', 10, 100, 1).name('Num Field Lines').onChange(createFieldLines);
+            // gui.add(params, 'sphereRadius', 0.5, 5.0).name('Gaussian Radius'); // Not animated by GUI, but can be set
+
+            // Window resizing
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function createFieldLines() {
+            // Remove existing lines
+            fieldLines.forEach(line => scene.remove(line));
+            fieldLines = [];
+
+            const chargePosition = pointCharge.position;
+            const lineLength = 10; // How far the lines extend
+
+            for (let i = 0; i < params.numFieldLines; i++) {
+                // Random direction using spherical coordinates
+                const phi = Math.acos(2 * Math.random() - 1); // inclination
+                const theta = 2 * Math.PI * Math.random();     // azimuth
+
+                const x = chargePosition.x + lineLength * Math.sin(phi) * Math.cos(theta);
+                const y = chargePosition.y + lineLength * Math.sin(phi) * Math.sin(theta);
+                const z = chargePosition.z + lineLength * Math.cos(phi);
+
+                const material = new THREE.LineBasicMaterial({ color: 0xffffff });
+                const points = [];
+                points.push(chargePosition);
+                points.push(new THREE.Vector3(x, y, z));
+
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                const line = new THREE.Line(geometry, material);
+                fieldLines.push(line);
+                scene.add(line);
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            const delta = clock.getDelta();
+            const elapsedTime = clock.getElapsedTime();
+
+            // Gaussian sphere animation
+            const animationDuration = 5; // seconds per phase
+            let currentPhaseTime = elapsedTime % (animationDuration * 4); // Loop through 4 phases
+
+            let currentEnclosedCharge = 0; // Assume 0 by default
+
+            // Phase 0: Expand
+            if (currentPhaseTime < animationDuration) {
+                const scale = 1 + (currentPhaseTime / animationDuration) * 3; // From 1 to 4
+                gaussianSphere.scale.set(scale, scale, scale);
+                gaussianSphere.position.set(0, 0, 0); // Keep it centered
+                if (gaussianSphere.scale.x * params.sphereRadius > pointCharge.geometry.boundingSphere.radius) {
+                    currentEnclosedCharge = params.chargeStrength;
+                }
+            }
+            // Phase 1: Contract
+            else if (currentPhaseTime < animationDuration * 2) {
+                const phaseTime = currentPhaseTime - animationDuration;
+                const scale = 4 - (phaseTime / animationDuration) * 3; // From 4 to 1
+                gaussianSphere.scale.set(scale, scale, scale);
+                gaussianSphere.position.set(0, 0, 0);
+                 if (gaussianSphere.scale.x * params.sphereRadius > pointCharge.geometry.boundingSphere.radius) {
+                    currentEnclosedCharge = params.chargeStrength;
+                }
+            }
+            // Phase 2: Move out (away from charge)
+            else if (currentPhaseTime < animationDuration * 3) {
+                const phaseTime = currentPhaseTime - animationDuration * 2;
+                const moveDistance = 5 * (phaseTime / animationDuration); // Moves up to 5 units
+                gaussianSphere.position.set(moveDistance, 0, 0); // Move along X-axis
+                gaussianSphere.scale.set(1, 1, 1); // Keep original scale
+                // Check if charge is inside
+                const distance = gaussianSphere.position.distanceTo(pointCharge.position);
+                if (distance < (params.sphereRadius * gaussianSphere.scale.x)) {
+                    currentEnclosedCharge = params.chargeStrength;
+                } else {
+                    currentEnclosedCharge = 0;
+                }
+            }
+            // Phase 3: Move back (to enclose charge)
+            else {
+                const phaseTime = currentPhaseTime - animationDuration * 3;
+                const moveDistance = 5 - (5 * (phaseTime / animationDuration)); // Moves back from 5 to 0 units
+                gaussianSphere.position.set(moveDistance, 0, 0);
+                gaussianSphere.scale.set(1, 1, 1);
+                // Check if charge is inside
+                const distance = gaussianSphere.position.distanceTo(pointCharge.position);
+                if (distance < (params.sphereRadius * gaussianSphere.scale.x)) {
+                    currentEnclosedCharge = params.chargeStrength;
+                } else {
+                    currentEnclosedCharge = 0;
+                }
+            }
+
+            // Update UI for enclosed charge
+            document.getElementById('enclosedCharge').innerText = currentEnclosedCharge.toFixed(2);
+
+
+            // Simple camera rotation for better view
+            camera.position.x = Math.sin(elapsedTime * 0.1) * 10;
+            camera.position.z = Math.cos(elapsedTime * 0.1) * 10;
+            camera.lookAt(0, 0, 0);
+
+            renderer.render(scene, camera);
+        }
+
+        // Initialize Bounding Sphere for charge after creation
+        pointCharge.geometry.computeBoundingSphere();
+
+    </script>
 </body>
 </html>

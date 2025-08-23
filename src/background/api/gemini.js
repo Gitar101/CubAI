@@ -3,7 +3,7 @@
 import { GoogleGenerativeAI, createPartFromUri } from "@google/generative-ai";
 import { GEMINI_API_KEY } from '../config/index.js';
 import { readUserMemory, writeUserMemory } from '../utils/userMemory.js';
-import { generateImage } from './chutes.js';
+import { generateImage, invokeChuteGLM } from './chutes.js';
 
 // Configure the client
 export const ai = new GoogleGenerativeAI(GEMINI_API_KEY);
@@ -103,18 +103,30 @@ export async function run(contents, generationConfig, systemInstruction, modelNa
 
       console.log(`[CubAI] Model Name: ${modelName}`);
       console.log(`[CubAI] Request Tools: ${JSON.stringify(request.tools)}`);
-      const model = ai.getGenerativeModel({ model: modelName });
-      const stream = await model.generateContentStream(request);
-      let fullResponse = "";
-      for await (const chunk of stream.stream) {
-        const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        if (textChunk) {
-          fullResponse += textChunk;
-          chrome.runtime.sendMessage({ action: "appendAIMessageChunk", text: textChunk });
+
+      if (modelName === "zai-org/GLM-4.5-Air") {
+        // Map contents to messages format expected by invokeChuteGLM
+        const messages = contents.map(content => ({
+          role: content.role,
+          parts: content.parts.map(part => ({ text: part.text }))
+        }));
+        const chuteResponse = await invokeChuteGLM(messages);
+        chrome.runtime.sendMessage({ action: "endAIStream" });
+        return chuteResponse.text; // Assuming invokeChuteGLM returns { text: "..." }
+      } else {
+        const model = ai.getGenerativeModel({ model: modelName });
+        const stream = await model.generateContentStream(request);
+        let fullResponse = "";
+        for await (const chunk of stream.stream) {
+          const textChunk = chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
+          if (textChunk) {
+            fullResponse += textChunk;
+            chrome.runtime.sendMessage({ action: "appendAIMessageChunk", text: textChunk });
+          }
         }
+        chrome.runtime.sendMessage({ action: "endAIStream" });
+        return fullResponse;
       }
-      chrome.runtime.sendMessage({ action: "endAIStream" });
-      return fullResponse;
     }
   } catch (e) {
     chrome.runtime.sendMessage({ action: "displayError", error: e.message || String(e) });

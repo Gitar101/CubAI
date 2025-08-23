@@ -40,6 +40,28 @@ const InputForm = ({
   handleContinueChat,
 }) => {
 
+  const getDisplayNameForModel = (modelId) => {
+    switch (modelId) {
+      case 'gemini-2.5-flash':
+        return 'G2 Flash';
+      case 'gemini-2.5-flash-lite':
+        return 'G2 Flash Lite';
+      case 'zai-org/GLM-4.5-Air':
+        return 'GLM 4.5 Air';
+      case 'deepseek-r1-distill-llama-70b':
+        return 'Deepseek Llama';
+      case 'meta-llama/llama-4-maverick-17b-128e-instruct':
+        return 'Llama 4 Maverick';
+      case 'llama-3.3-70b-versatile':
+        return 'Llama 3.3 Versatile';
+      case 'openai/gpt-oss-120b':
+        return 'GPT-OSS 120b';
+      default:
+        // Fallback for any unlisted models, or if modelId is null/undefined
+        return modelId ? modelId.split('/').pop().replace(/-/g, ' ') : 'Select Model';
+    }
+  };
+
   return (
     <div
       className="floating-input-bar"
@@ -439,7 +461,7 @@ const InputForm = ({
                     style={{ height: 30, display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent', padding: '0 8px' }}
                   >
                     <span style={{ fontSize: 12, color: '#3E3F29', fontWeight: 600 }}>
-                      {selectedModel === 'gemini-2.5-flash-lite' ? 'G2 Flash Lite' : selectedModel === 'chutes-glm-4.5-air' ? 'GLM 4.5 Air' : 'G2 Flash'}
+                      {getDisplayNameForModel(selectedModel)}
                     </span>
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#3E3F29" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M6 9l6 6 6-6" />
@@ -464,6 +486,7 @@ const InputForm = ({
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       >
+                        {/* Model: gemini-2.5-flash */}
                         <button
                           className="menu-item"
                           onMouseDown={(e) => { e.stopPropagation(); }}
@@ -475,9 +498,11 @@ const InputForm = ({
                           }}
                           style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
                         >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash' ? '#43cea2' : '#6b7280' }} />
-                          gemini-2.5-flash
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel === 'gemini-2.5-flash' ? '#43cea2' : '#6b7280' }} />
+                          {getDisplayNameForModel('gemini-2.5-flash')}
                         </button>
+
+                        {/* Model: gemini-2.5-flash-lite */}
                         <button
                           className="menu-item"
                           onMouseDown={(e) => { e.stopPropagation(); }}
@@ -489,23 +514,27 @@ const InputForm = ({
                           }}
                           style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
                         >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='gemini-2.5-flash-lite' ? '#43cea2' : '#6b7280' }} />
-                          gemini-2.5-flash-lite
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel === 'gemini-2.5-flash-lite' ? '#43cea2' : '#6b7280' }} />
+                          {getDisplayNameForModel('gemini-2.5-flash-lite')}
                         </button>
+
+                        {/* Model: zai-org/GLM-4.5-Air */}
                         <button
                           className="menu-item"
                           onMouseDown={(e) => { e.stopPropagation(); }}
                           onClick={(e) => {
                             e.stopPropagation();
-                            try { console.log('[ModelSelector] Select chutes-glm-4.5-air'); } catch {}
-                            setSelectedModel('chutes-glm-4.5-air');
+                            try { console.log('[ModelSelector] Select zai-org/GLM-4.5-Air'); } catch {}
+                            setSelectedModel('zai-org/GLM-4.5-Air');
                             setShowModelMenu(false);
                           }}
                           style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
                         >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='chutes-glm-4.5-air' ? '#43cea2' : '#6b7280' }} />
-                          zai-org/GLM-4.5-Air
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel === 'zai-org/GLM-4.5-Air' ? '#43cea2' : '#6b7280' }} />
+                          {getDisplayNameForModel('zai-org/GLM-4.5-Air')}
                         </button>
+
+                        {/* Model: deepseek-r1-distill-llama-70b */}
                         <button
                           className="menu-item"
                           onMouseDown={(e) => { e.stopPropagation(); }}
@@ -517,9 +546,11 @@ const InputForm = ({
                           }}
                           style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
                         >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='deepseek-r1-distill-llama-70b' ? '#43cea2' : '#6b7280' }} />
-                          deepseek-r1-distill-llama-70b
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel === 'deepseek-r1-distill-llama-70b' ? '#43cea2' : '#6b7280' }} />
+                          {getDisplayNameForModel('deepseek-r1-distill-llama-70b')}
                         </button>
+
+                        {/* Model: meta-llama/llama-4-maverick-17b-128e-instruct */}
                         <button
                           className="menu-item"
                           onMouseDown={(e) => { e.stopPropagation(); }}
@@ -531,9 +562,11 @@ const InputForm = ({
                           }}
                           style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
                         >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='meta-llama/llama-4-maverick-17b-128e-instruct' ? '#43cea2' : '#6b7280' }} />
-                          meta-llama/llama-4-maverick-17b-128e-instruct
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel === 'meta-llama/llama-4-maverick-17b-128e-instruct' ? '#43cea2' : '#6b7280' }} />
+                          {getDisplayNameForModel('meta-llama/llama-4-maverick-17b-128e-instruct')}
                         </button>
+
+                        {/* Model: llama-3.3-70b-versatile */}
                         <button
                           className="menu-item"
                           onMouseDown={(e) => { e.stopPropagation(); }}
@@ -545,9 +578,11 @@ const InputForm = ({
                           }}
                           style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
                         >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='llama-3.3-70b-versatile' ? '#43cea2' : '#6b7280' }} />
-                          llama-3.3-70b-versatile
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel === 'llama-3.3-70b-versatile' ? '#43cea2' : '#6b7280' }} />
+                          {getDisplayNameForModel('llama-3.3-70b-versatile')}
                         </button>
+
+                        {/* Model: openai/gpt-oss-120b */}
                         <button
                           className="menu-item"
                           onMouseDown={(e) => { e.stopPropagation(); }}
@@ -559,8 +594,8 @@ const InputForm = ({
                           }}
                           style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'transparent', color: '#e5e7eb', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}
                         >
-                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel==='openai/gpt-oss-120b' ? '#43cea2' : '#6b7280' }} />
-                          openai/gpt-oss-120b
+                          <span style={{ width: 6, height: 6, borderRadius: 9999, background: selectedModel === 'openai/gpt-oss-120b' ? '#43cea2' : '#6b7280' }} />
+                          {getDisplayNameForModel('openai/gpt-oss-120b')}
                         </button>
                       </div>
                     </React.Fragment>
