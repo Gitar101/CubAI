@@ -338,6 +338,40 @@ body {
   color: #3E3F29; /* Dark brown color for LaTeX text */
 }
 
+/* Code Block Styling */
+.relative.rounded-md.overflow-hidden.border-2.border-\[\#8B7B6B\] {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.relative.rounded-md.overflow-hidden.border-2.border-\[\#8B7B6B\] > div:first-child {
+  background-color: #3C3C3C;
+  color: #CCCCCC;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+}
+
+.relative.rounded-md.overflow-hidden.border-2.border-\[\#8B7B6B\] > div:first-child span {
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.relative.rounded-md.overflow-hidden.border-2.border-\[\#8B7B6B\] button {
+  background-color: transparent;
+  color: #CCCCCC;
+  border: none;
+  transition: color 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.relative.rounded-md.overflow-hidden.border-2.border-\[\#8B7B6B\] button:hover {
+  color: white;
+}
+
 /* Floating curved input bar spacing and stacking */
 .floating-input-bar {
   pointer-events: none;         /* allow clicks to pass except inside children we enable */

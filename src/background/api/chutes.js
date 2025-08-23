@@ -1,3 +1,5 @@
+import { CHUTES_API_KEY } from '../config/index.js';
+
 /**
  * Generates an image using the Chutes.ai API.
  *
@@ -10,16 +12,16 @@ export async function generateImage(prompt, negative_prompt) {
     const response = await fetch("https://image.chutes.ai/generate", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${import.meta.env.VITE_CHUTES_API_KEY}`,
+        "Authorization": `Bearer ${CHUTES_API_KEY}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        "model": "Lykon/dreamshaper-xl-1-0",
+        "model": "qwen-image",
         "prompt": prompt,
-        "negative_prompt": negative_prompt,
+        "negative_prompt": negative_prompt || "", // Ensure negative_prompt is a string
         "guidance_scale": 7.5,
-        "width": 720,
-        "height": 1280,
+        "width": 1024,
+        "height": 1024,
         "num_inference_steps": 50
       })
     });
@@ -65,7 +67,7 @@ export async function invokeChuteGLM(messages) {
           content: msg.parts.map(part => part.text).join('\n') // Assuming only text parts for chat
         })),
         "stream": true,
-        "max_tokens": 1024,
+        "max_tokens": 8000,
         "temperature": 0.7
       })
     });

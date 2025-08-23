@@ -9,6 +9,10 @@ export const GROQ_API_KEY = (typeof import.meta !== 'undefined' && import.meta.e
   ? import.meta.env.VITE_GROQ_API_KEY
   : undefined;
 
+export const CHUTES_API_KEY = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_CHUTES_API_KEY)
+  ? import.meta.env.VITE_CHUTES_API_KEY
+  : undefined;
+
 // Define the grounding tool for Gemini API
 export const groundingTool = {
   googleSearch: {},
@@ -19,7 +23,7 @@ export const defaultGenerationConfig = {
   temperature: 0.7,
   topP: 0.95,
   topK: 64,
-  maxOutputTokens: 10000,
+  maxOutputTokens: 65535,
 };
 
 // YouTube summarization settings

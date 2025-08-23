@@ -1,7 +1,8 @@
 import React from 'react';
 import ShinyText from './ShinyText';
+import { History } from 'lucide-react';
 
-const Header = ({ clearChat }) => {
+const Header = ({ clearChat, onHistoryClick }) => {
   return (
     <header
       className="header"
@@ -27,6 +28,23 @@ const Header = ({ clearChat }) => {
         />
         <ShinyText text="CubAI" speed={5} />
         <div style={{ flex: 1 }} />
+        <button
+          onClick={onHistoryClick}
+          aria-label="View chat history"
+          title="View chat history"
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: '0 8px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#F5EFE6', // Adjust color to fit theme
+          }}
+        >
+          <History size={24} />
+        </button>
         <button
           onClick={clearChat}
           aria-label="Clear chat"

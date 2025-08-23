@@ -8,7 +8,8 @@ export const useChromeExtension = (
   setIsLoading,
   setMessages,
   setMessageIdCounter,
-  setError
+  setError,
+  messageIdCounter
 ) => {
   useEffect(() => {
     if (chrome.runtime && chrome.runtime.onMessage) {

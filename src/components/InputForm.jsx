@@ -8,6 +8,8 @@ const InputForm = ({
   handlePaste,
   isLoading,
   generationMode,
+  canvasMode,
+  toggleCanvasMode,
   mode,
   handleSend,
   toggleModeMenu,
@@ -33,7 +35,11 @@ const InputForm = ({
   setCaptureMeta,
   contextPreview,
   setContextPreview,
+  isAbruptlyStopped,
+  setIsAbruptlyStopped,
+  handleContinueChat,
 }) => {
+
   return (
     <div
       className="floating-input-bar"
@@ -124,9 +130,37 @@ const InputForm = ({
             position: 'relative'
           }}
         >
+          {isAbruptlyStopped && (
+            <button
+              onClick={handleContinueChat}
+              style={{
+                marginBottom: 10,
+                padding: '8px 16px',
+                borderRadius: 8,
+                background: '#4CAF50', /* Green background */
+                color: 'white',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: 16,
+                fontWeight: 600,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                alignSelf: 'flex-start', /* Align to the left */
+              }}
+            >
+              Continue
+            </button>
+          )}
           <textarea
             className="chatlike-input"
-            placeholder={generationMode === 'image' ? 'Describe an image to generate...' : (mode === 'chat' ? 'Chat with CubAI…' : 'Ask with page context…')}
+            placeholder={
+              generationMode === 'image'
+                ? 'Describe an image to generate...'
+                : canvasMode
+                  ? 'Draw on the canvas...'
+                  : mode === 'chat'
+                    ? 'Chat with CubAI…'
+                    : 'Ask with page context…'
+            }
             value={inputValue}
             onChange={handleInputChange}
             onKeyDown={handleKeyPress}
@@ -144,7 +178,8 @@ const InputForm = ({
               letterSpacing: 0.2,
               borderRadius: 8,
               padding: '8px 10px',
-              backgroundColor: 'rgba(255,255,255,0.6)'
+              backgroundColor: 'rgba(255,255,255,0.6)',
+              transition: 'height 0.3s ease-out' /* Added transition for smooth resizing */
             }}
           />
           <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -362,6 +397,26 @@ const InputForm = ({
                     }}
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3E3F29" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-image"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+                  </button>
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <button
+                    className="icon-button"
+                    onClick={toggleCanvasMode}
+                    disabled={isLoading}
+                    aria-label="Toggle Canvas Mode"
+                    title="Toggle Canvas Mode"
+                    style={{
+                      width: 30, height: 30, display: 'grid', placeItems: 'center',
+                      borderRadius: 8,
+                      background: canvasMode ? 'rgba(168, 85, 247, 0.3)' : 'transparent',
+                      border: '1px solid',
+                      borderColor: canvasMode ? '#A855F7' : 'rgba(255,255,255,0.2)',
+                      transition: 'background-color 0.2s, border-color 0.2s',
+                      boxShadow: canvasMode ? '0 0 0 2px #A855F7, 0 0 0 5px rgba(168, 85, 247, 0.6)' : 'none',
+                    }}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3E3F29" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-pencil-line"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/><path d="m19 12-2-2"/><path d="M15 6l2 2"/></svg>
                   </button>
                 </div>
                 <div style={{ position: 'relative' }} data-trigger="model">

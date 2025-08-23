@@ -82,6 +82,7 @@ export async function run(contents, generationConfig, systemInstruction, modelNa
       }
 
       const { prompt, negative_prompt, description } = functionCall.args;
+      console.log("[CubAI] Image Generation Prompt from Gemini:", { prompt, negative_prompt, description });
       const imageDataResponse = await generateImage(prompt, negative_prompt);
       const imageData = imageDataResponse[0]?.data;
       chrome.runtime.sendMessage({ action: "endAIStream" });

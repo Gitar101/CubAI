@@ -12,30 +12,164 @@ import Header from './Header';
 import MessageList from './MessageList';
 import InputForm from './InputForm';
 import ContextDisplay from './ContextDisplay';
+import HistoryPanel from './HistoryPanel'; // Import HistoryPanel
 
 const remarkPlugins = [remarkGfm, remarkMath];
 const rehypePlugins = [rehypeKatex];
 
 const App = () => {
-  const chatState = useChatState();
+  const {
+    messages,
+    inputValue,
+    setInputValue,
+    systemContext,
+    setSystemContext,
+    isLoading,
+    setIsLoading,
+    isStreaming,
+    error,
+    setError,
+    capturedImage,
+    setCapturedImage,
+    capturedSlices,
+    setCapturedSlices,
+    captureMeta,
+    setCaptureMeta,
+    messageIdCounter,
+    setMessageIdCounter,
+    clearChat,
+    isAbruptlyStopped,
+    setIsAbruptlyStopped,
+    setMessages,
+    saveChatSession,
+    chatHistory, // Destructure chatHistory
+    activeSessionId, // Destructure activeSessionId
+    setActiveSessionId, // Destructure setActiveSessionId
+    deleteChatSession, // Destructure deleteChatSession
+  } = useChatState();
   const contextState = useContextState();
   const uiState = useUIState();
 
+  const [showHistory, setShowHistory] = React.useState(false);
+
+  const handleHistoryClick = useCallback(() => {
+    setShowHistory(prev => !prev);
+  }, []);
+
+
   useChromeExtension(
     uiState.setMode,
-    chatState.setInputValue,
-    chatState.setSystemContext,
+    setInputValue,
+    setSystemContext,
     contextState.updateContextPreview,
-    chatState.setIsLoading,
-    chatState.setMessages,
-    chatState.setMessageIdCounter,
-    chatState.setError,
-    chatState.messageIdCounter,
+    setIsLoading,
+    setMessages,
+    setMessageIdCounter,
+    setError,
+    messageIdCounter,
   );
 
-  const handleSend = () => {
+  const performSend = useCallback((includeCtx, systemCtxForSend, continueChat = false) => {
+    const finalUserInput = continueChat ? "Please continue your previous response." : inputValue;
+    if (!finalUserInput.trim() && !capturedImage && (!capturedSlices || capturedSlices.length === 0)) return;
+
+    const content = [];
+    if (capturedImage) {
+      content.push({ type: 'image', url: capturedImage });
+      if (captureMeta?.w && captureMeta?.h) {
+        content.push({ type: 'text', text: `//image-size: ${captureMeta.w}x${captureMeta.h}` });
+      }
+    }
+    if (capturedSlices && capturedSlices.length > 0) {
+      capturedSlices
+        .slice()
+        .sort((a, b) => a.index - b.index)
+        .forEach(s => content.push({ type: 'image', url: s.url }));
+      const totalKB = Math.round(capturedSlices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
+      content.push({ type: 'text', text: `//image-slices: ${capturedSlices.length} • ~${totalKB} KB` });
+    }
+    if (finalUserInput.trim()) content.push({ type: 'text', text: finalUserInput });
+
+    const newUserMessage = { id: messageIdCounter, role: 'user', content, contexts: contextState.contexts };
+
+    const newAiMessageId = messageIdCounter + 1;
+    const updatedMessages = [...messages, newUserMessage]; // Use updatedMessages for saving
+    setMessages(updatedMessages);
+    setMessageIdCounter(prev => prev + 1);
+    setIsLoading(true);
+    setIsAbruptlyStopped(false); // Reset abruptly stopped state on new send
+
+    // Save or update the current chat session
+    const newActiveSessionId = saveChatSession(updatedMessages, activeSessionId);
+    if (newActiveSessionId !== activeSessionId) {
+      setActiveSessionId(newActiveSessionId);
+    }
+
+    setInputValue('');
+    setCapturedImage(null);
+    setCapturedSlices([]);
+    if (contextState.contexts.length > 0) {
+      contextState.setContexts([]);
+      chrome.storage.local.set({ cubext: [] });
+    }
+
+    const finalUserMessage = { ...newUserMessage, content: [...newUserMessage.content] };
+    if (includeCtx && contextState.contextPreview?.url && !contextState.hasContextPillBeenRendered) {
+      finalUserMessage.content.push({ type: 'text', text: `//context-url: ${contextState.contextPreview.url}` });
+      contextState.setHasContextPillBeenRendered(true);
+    }
+
+    const finalMessages = [...messages, finalUserMessage];
+
+    const useGoogleSearch = ['summarize', 'explain', 'chat', 'Tutor'].includes(uiState.mode);
+
+    const systemInstruction = systemPrompts[uiState.mode];
+    const userMessageContent = finalUserMessage.content;
+
+    console.log('Current UI Mode:', uiState.mode);
+    console.log('System Prompt Sent:', systemInstruction);
+    console.log('User Message Sent (JSON):', JSON.stringify(userMessageContent, null, 2));
+
+    chrome.runtime.sendMessage({
+      action: "sendChatMessage",
+      messages: JSON.parse(JSON.stringify(finalMessages)),
+      systemInstruction: systemInstruction,
+      systemContext: includeCtx ? systemCtxForSend : null,
+      model: uiState.selectedModel,
+      selectedModel: uiState.selectedModel,
+      file: null,
+      useGoogleSearch: useGoogleSearch,
+      messageId: newAiMessageId,
+    });
+  }, [
+    inputValue,
+    capturedImage,
+    capturedSlices,
+    captureMeta,
+    messageIdCounter,
+    setMessages,
+    setMessageIdCounter,
+    setIsLoading,
+    setIsAbruptlyStopped,
+    setInputValue,
+    setCapturedImage,
+    setCapturedSlices,
+    contextState.contexts,
+    contextState.setContexts,
+    contextState.contextPreview?.url,
+    contextState.hasContextPillBeenRendered,
+    contextState.setHasContextPillBeenRendered,
+    messages,
+    uiState.mode,
+    uiState.selectedModel,
+    saveChatSession, // Add saveChatSession to dependencies
+    activeSessionId, // Add activeSessionId to dependencies
+    setActiveSessionId, // Add setActiveSessionId to dependencies
+  ]);
+
+  const handleSend = useCallback(() => {
     if (uiState.generationMode === 'image') {
-      if (!chatState.inputValue.trim()) return;
+      if (!inputValue.trim()) return;
 
       const getFormattedImageContext = (history, newUserPrompt) => {
         let contextString = `<system prompt>\nYou are an expert image generator. Follow the user's instructions carefully.\n`;
@@ -64,119 +198,44 @@ const App = () => {
         return contextString;
       };
 
-      const imageContext = getFormattedImageContext(chatState.messages, chatState.inputValue);
+      const imageContext = getFormattedImageContext(messages, inputValue);
       
-      const isFirstImage = !chatState.messages.some(m => m.role === 'ai' && m.content.some(c => c.type === 'image' || c.type === 'image_prompt'));
+      const isFirstImage = !messages.some(m => m.role === 'ai' && m.content.some(c => c.type === 'image' || c.type === 'image_prompt'));
 
       const newUserMessage = {
-        id: chatState.messageIdCounter,
+        id: messageIdCounter,
         role: 'user',
-        content: [{ type: 'text', text: isFirstImage ? `${chatState.inputValue}` : chatState.inputValue }]
+        content: [{ type: 'text', text: isFirstImage ? `${inputValue}` : inputValue }]
       };
       
-      chatState.setMessages(prev => [...prev, newUserMessage]);
-      chatState.setMessageIdCounter(prev => prev + 1);
-      chatState.setIsLoading(true);
+      setMessages(prev => [...prev, newUserMessage]);
+      setMessageIdCounter(prev => prev + 1);
+      setIsLoading(true);
       
       chrome.runtime.sendMessage({
         action: 'generate-image',
         prompt: imageContext,
-        originalPrompt: chatState.inputValue,
+        originalPrompt: inputValue,
       });
       
-      chatState.setInputValue('');
+      setInputValue('');
       return;
     }
 
-    if (!chatState.inputValue.trim() && !chatState.capturedImage && (!chatState.capturedSlices || chatState.capturedSlices.length === 0)) return;
-
-    const finalUserInput = chatState.inputValue;
-    const content = [];
-    if (chatState.capturedImage) {
-      content.push({ type: 'image', url: chatState.capturedImage });
-      if (chatState.captureMeta?.w && chatState.captureMeta?.h) {
-        content.push({ type: 'text', text: `//image-size: ${chatState.captureMeta.w}x${chatState.captureMeta.h}` });
-      }
-    }
-    if (chatState.capturedSlices && chatState.capturedSlices.length > 0) {
-      chatState.capturedSlices
-        .slice()
-        .sort((a, b) => a.index - b.index)
-        .forEach(s => content.push({ type: 'image', url: s.url }));
-      const totalKB = Math.round(chatState.capturedSlices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
-      content.push({ type: 'text', text: `//image-slices: ${chatState.capturedSlices.length} • ~${totalKB} KB` });
-    }
-    if (finalUserInput.trim()) content.push({ type: 'text', text: finalUserInput });
-
-    const newUserMessage = { id: chatState.messageIdCounter, role: 'user', content, contexts: contextState.contexts };
-
-    const newAiMessageId = chatState.messageIdCounter + 1;
-    const newAiMessage = {
-      id: newAiMessageId,
-      role: 'ai',
-      content: [{ type: 'text', text: '' }],
-      reasoning: '', // Initialize reasoning for the new message
-    };
-
-    // Only add the new AI message placeholder if it's not the gpt-oss-120b model
-    // The gpt-oss-120b model handles its own message container creation via startAIStream
-    if (uiState.selectedModel !== "openai/gpt-oss-120b") {
-      chatState.setMessages(prev => [...prev, newUserMessage, newAiMessage]);
-      chatState.setMessageIdCounter(prev => prev + 2);
-    } else {
-      // For gpt-oss-120b, only add the user message and increment counter by 1
-      chatState.setMessages(prev => [...prev, newUserMessage]);
-      chatState.setMessageIdCounter(prev => prev + 1);
-    }
-    chatState.setIsLoading(true);
-
-    chatState.setInputValue('');
-    chatState.setCapturedImage(null);
-    chatState.setCapturedSlices([]);
-    if (contextState.contexts.length > 0) {
-      contextState.setContexts([]);
-      chrome.storage.local.set({ cubext: [] });
-    }
-
-    const performSend = (includeCtx, systemCtxForSend) => {
-      const finalUserMessage = { ...newUserMessage, content: [...newUserMessage.content] };
-      if (includeCtx && contextState.contextPreview?.url && !contextState.hasContextPillBeenRendered) {
-        finalUserMessage.content.push({ type: 'text', text: `//context-url: ${contextState.contextPreview.url}` });
-        contextState.setHasContextPillBeenRendered(true);
-      }
-
-      const finalMessages = [...chatState.messages, finalUserMessage];
-
-      const useGoogleSearch = ['summarize', 'explain', 'chat', 'Tutor'].includes(uiState.mode);
-
-      chrome.runtime.sendMessage({
-        action: "sendChatMessage",
-        messages: JSON.parse(JSON.stringify(finalMessages)),
-        systemInstruction: systemPrompts[uiState.mode],
-        systemContext: includeCtx ? systemCtxForSend : null,
-        model: uiState.selectedModel,
-        selectedModel: uiState.selectedModel,
-        file: null,
-        useGoogleSearch: useGoogleSearch,
-        messageId: newAiMessageId, // Pass the ID of the AI message to update
-      });
-    };
-
     const shouldIncludeContext = ['explain', 'summarize', 'Tutor'].includes(uiState.mode);
 
-    if (shouldIncludeContext && chatState.systemContext) {
-      performSend(true, chatState.systemContext);
+    if (shouldIncludeContext && systemContext) {
+      performSend(true, systemContext);
     } else if (shouldIncludeContext) {
-      // Fallback for cases where context might not have been set yet
       try {
         chrome.runtime.sendMessage({ action: "getActiveTabCubAIContext" }, (resp) => {
           if (chrome.runtime.lastError || !resp || !resp.ok) {
             const errMsg = resp?.error || chrome.runtime.lastError?.message || "Failed to get page context";
-            chatState.setError(errMsg);
-            chatState.setIsLoading(false);
+            setError(errMsg);
+            setIsLoading(false);
           } else {
             const { context, tabMeta } = resp;
-            chatState.setSystemContext(context || '');
+            setSystemContext(context || '');
             contextState.updateContextPreview({
               title: tabMeta?.title || 'Untitled',
               url: tabMeta?.url || '',
@@ -188,33 +247,67 @@ const App = () => {
           }
         });
       } catch (e) {
-        chatState.setError(String(e?.message || e));
-        chatState.setIsLoading(false);
+        setError(String(e?.message || e));
+        setIsLoading(false);
       }
     } else {
       performSend(false, null);
     }
-  };
+  }, [
+    inputValue,
+    capturedImage,
+    capturedSlices,
+    captureMeta,
+    messageIdCounter,
+    setMessages,
+    setMessageIdCounter,
+    setIsLoading,
+    setInputValue,
+    setCapturedImage,
+    setCapturedSlices,
+    contextState.contexts,
+    contextState.setContexts,
+    contextState.contextPreview?.url,
+    contextState.hasContextPillBeenRendered,
+    contextState.setHasContextPillBeenRendered,
+    messages,
+    uiState.mode,
+    uiState.selectedModel,
+    systemContext,
+    setSystemContext,
+    setError,
+    setIsAbruptlyStopped,
+    performSend,
+  ]);
 
-  const handleInputChange = (e) => {
+  const handleContinueChat = useCallback(() => {
+    setIsAbruptlyStopped(false);
+    performSend(false, null, true); // Pass true for continueChat
+  }, [setIsAbruptlyStopped, performSend]);
+
+
+  const handleInputChange = useCallback((e) => {
     const textarea = e.target;
-    textarea.style.height = 'auto';
-    textarea.style.height = textarea.scrollHeight + 'px';
-    chatState.setInputValue(textarea.value);
-  };
+    textarea.style.height = 'auto'; // Reset height to auto to calculate new scrollHeight
+    textarea.style.height = textarea.scrollHeight + 'px'; // Set height based on content
+    if (textarea.value === '') {
+      textarea.rows = 1; // Reset rows to 1 when input is empty
+    }
+    setInputValue(textarea.value);
+  }, [setInputValue]);
 
-  const handleKeyPress = (e) => {
+  const handleKeyPress = useCallback((e) => {
     if (e.key === 'Enter') {
       if (e.shiftKey) {
-        chatState.setInputValue(prev => prev + '\n');
+        setInputValue(prev => prev + '\n');
         e.preventDefault();
       } else {
         handleSend();
       }
     }
-  };
+  }, [handleSend, setInputValue]);
 
-  const handlePaste = (e) => {
+  const handlePaste = useCallback((e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
 
@@ -223,75 +316,75 @@ const App = () => {
         const blob = item.getAsFile();
         const reader = new FileReader();
         reader.onload = () => {
-          chatState.setCapturedImage(reader.result);
+          setCapturedImage(reader.result);
         };
         reader.readAsDataURL(blob);
         e.preventDefault();
         break;
       }
     }
-  };
+  }, [setCapturedImage]);
 
   const handleCaptureFullPage = useCallback(async () => {
     const dbg = (msg, extra) => { try { console.log('[CaptureFullPage]', msg, extra ?? ''); } catch {} };
     try {
-      chatState.setError('');
-      chatState.setCapturedImage(null);
-      chatState.setCapturedSlices([]);
+      setError('');
+      setCapturedImage(null);
+      setCapturedSlices([]);
       dbg('Sending chrome.runtime.sendMessage', { action: 'captureFullPage' });
       chrome.runtime.sendMessage({ action: 'captureFullPage' }, (resp) => {
         if (typeof resp === 'undefined') {
           const lastErr = chrome?.runtime?.lastError?.message;
           dbg('Response is undefined', { lastError: lastErr });
-          chatState.setError(lastErr || 'No response from background for captureFullPage');
+          setError(lastErr || 'No response from background for captureFullPage');
           return;
         }
         dbg('Received response', { keys: Object.keys(resp || {}), ok: resp?.ok, slices: Array.isArray(resp?.slices) ? resp.slices.length : 0 });
         if (chrome.runtime.lastError) {
           dbg('chrome.runtime.lastError', chrome.runtime.lastError.message);
-          chatState.setError(chrome.runtime.lastError.message);
+          setError(chrome.runtime.lastError.message);
           return;
         }
         if (!resp || !resp.ok) {
           dbg('Not ok response', resp);
-          chatState.setError(resp?.error || 'Failed to capture page');
+          setError(resp?.error || 'Failed to capture page');
           return;
         }
         if (Array.isArray(resp.slices) && resp.slices.length > 0) {
           dbg('Applying slices', { count: resp.slices.length, first: resp.slices[0] ? { w: resp.slices[0].w, h: resp.slices[0].h, len: resp.slices[0].url?.length } : null });
-          chatState.setCapturedSlices(resp.slices);
+          setCapturedSlices(resp.slices);
           const totalKB = Math.round(resp.slices.reduce((acc, s) => acc + (s.url.length * 3 / 4) / 1024, 0));
-          chatState.setCaptureMeta({ w: resp.slices[0].w, h: resp.slices[0].h, kb: totalKB });
+          setCaptureMeta({ w: resp.slices[0].w, h: resp.slices[0].h, kb: totalKB });
         } else if (resp.dataUrl) {
           dbg('Applying single image', { len: resp.dataUrl.length, w: resp.width, h: resp.height });
-          chatState.setCapturedImage(resp.dataUrl);
+          setCapturedImage(resp.dataUrl);
           const approxKB = Math.round((resp.dataUrl.length * 3 / 4) / 1024);
-          chatState.setCaptureMeta({ w: resp.width, h: resp.height, kb: approxKB });
+          setCaptureMeta({ w: resp.width, h: resp.height, kb: approxKB });
         } else {
           dbg('No data in response', resp);
-          chatState.setError('Capture returned no data');
+          setError('Capture returned no data');
         }
       });
     } catch (e) {
       dbg('Exception thrown', e);
-      chatState.setError(String(e?.message || e));
+      setError(String(e?.message || e));
     }
-  }, [chatState.setError, chatState.setCapturedImage, chatState.setCapturedSlices, chatState.setCaptureMeta]);
+  }, [setError, setCapturedImage, setCapturedSlices, setCaptureMeta]);
 
-  const addTabContext = (tabId) => {
+  const addTabContext = useCallback((tabId) => {
     try {
       const tabMeta = (uiState.availableTabs || []).find(t => t.id === tabId);
       chrome.runtime.sendMessage({ action: "getTabContent", tabId }, (response) => {
         if (chrome.runtime.lastError) {
-          chatState.setError(chrome.runtime.lastError.message);
+          setError(chrome.runtime.lastError.message);
           return;
         }
         if (response?.error) {
-          chatState.setError(response.error);
+          setError(response.error);
           return;
         }
         const text = response?.content || '';
-        chatState.setSystemContext(prev => (prev ? `${prev}\n\n[Page ${tabId}]\n${text}` : text));
+        setSystemContext(prev => (prev ? `${prev}\n\n[Page ${tabId}]\n${text}` : text));
         uiState.toggleTabsMenu();
 
         const title = tabMeta?.title || 'Untitled';
@@ -307,26 +400,41 @@ const App = () => {
         });
       });
     } catch (e) {
-      chatState.setError("Failed to add tab context.");
+      setError("Failed to add tab context.");
     }
-  };
+  }, [setError, setSystemContext, uiState.availableTabs, uiState.toggleTabsMenu, contextState.updateContextPreview, contextState.updateContextPreview]);
 
   return (
     <div className="app-container" style={{ position: 'relative', minHeight: '100vh', backgroundColor: '#BCA88D' }}>
-      <Header clearChat={chatState.clearChat} />
-      <MessageList
-        messages={chatState.messages}
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        isStreaming={chatState.isStreaming}
-      />
+      <Header clearChat={clearChat} onHistoryClick={handleHistoryClick} />
+      {showHistory ? (
+        <HistoryPanel
+          chatHistory={chatHistory}
+          onLoadSession={(session) => {
+            setMessages(session.messages);
+            setActiveSessionId(session.id); // Set active session when loading
+            setShowHistory(false); // Hide history panel after loading
+          }}
+          onDeleteSession={deleteChatSession} // Pass delete function
+          onBack={() => setShowHistory(false)}
+        />
+      ) : (
+        <MessageList
+          messages={messages}
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypeKatex}
+          isStreaming={isStreaming}
+        />
+      )}
       <InputForm
-        inputValue={chatState.inputValue}
+        inputValue={inputValue}
         handleInputChange={handleInputChange}
         handleKeyPress={handleKeyPress}
         handlePaste={handlePaste}
-        isLoading={chatState.isLoading}
+        isLoading={isLoading}
         generationMode={uiState.generationMode}
+        canvasMode={uiState.canvasMode}
+        toggleCanvasMode={uiState.toggleCanvasMode}
         mode={uiState.mode}
         handleSend={handleSend}
         toggleModeMenu={uiState.toggleModeMenu}
@@ -344,17 +452,20 @@ const App = () => {
         setShowModelMenu={uiState.setShowModelMenu}
         setShowModeMenu={uiState.setShowModeMenu}
         setSelectedModel={uiState.onSelectModel}
-        capturedImage={chatState.capturedImage}
-        capturedSlices={chatState.capturedSlices}
-        captureMeta={chatState.captureMeta}
-        setCapturedImage={chatState.setCapturedImage}
-        setCapturedSlices={chatState.setCapturedSlices}
-        setCaptureMeta={chatState.setCaptureMeta}
+        capturedImage={capturedImage}
+        capturedSlices={capturedSlices}
+        captureMeta={captureMeta}
+        setCapturedImage={setCapturedImage}
+        setCapturedSlices={setCapturedSlices}
+        setCaptureMeta={setCaptureMeta}
         contextPreview={contextState.contextPreview}
         setContextPreview={contextState.setContextPreview}
+        isAbruptlyStopped={isAbruptlyStopped}
+        setIsAbruptlyStopped={setIsAbruptlyStopped}
+        handleContinueChat={handleContinueChat}
       />
-      {chatState.isLoading && <div className="loading-message">Loading...</div>}
-      {chatState.error && <div className="message error-message">{chatState.error}</div>}
+      {isLoading && <div className="loading-message">Loading...</div>}
+      {error && <div className="message error-message">{error}</div>}
     </div>
   );
 };

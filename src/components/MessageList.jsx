@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Brain } from 'lucide-react'; // Import Brain icon
 import { convertLatexCodeBlocks } from '../utils/latex';
+import CodeBlock from './CodeBlock';
 
 const MessageList = ({ messages, remarkPlugins, rehypePlugins, isStreaming }) => {
   // State to manage expanded/collapsed status for each thinking message
@@ -119,6 +120,16 @@ const MessageList = ({ messages, remarkPlugins, rehypePlugins, isStreaming }) =>
                           remarkPlugins={remarkPlugins}
                           rehypePlugins={rehypePlugins}
                           components={{
+                            code({ node, inline, className, children, ...props }) {
+                              const match = /language-(\w+)/.exec(className || '');
+                              return !inline && match ? (
+                                <CodeBlock language={match[1]} code={String(children).replace(/\n$/, '')} />
+                              ) : (
+                                <code className={className} {...props}>
+                                  {children}
+                                </code>
+                              );
+                            },
                             table: ({node, ...props}) => (
                               <table style={{
                                 borderCollapse: 'collapse',
@@ -355,6 +366,16 @@ const MessageList = ({ messages, remarkPlugins, rehypePlugins, isStreaming }) =>
                         remarkPlugins={remarkPlugins}
                         rehypePlugins={rehypePlugins}
                         components={{
+                          code({ node, inline, className, children, ...props }) {
+                            const match = /language-(\w+)/.exec(className || '');
+                            return !inline && match ? (
+                              <CodeBlock language={match[1]} code={String(children).replace(/\n$/, '')} />
+                            ) : (
+                              <code className={className} {...props}>
+                                {children}
+                              </code>
+                            );
+                          },
                           table: ({node, ...props}) => (
                             <table style={{
                               borderCollapse: 'collapse',

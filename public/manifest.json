@@ -3,6 +3,9 @@
   "name": "CubAI",
   "version": "1.0",
   "description": "A React-based Chrome extension sidebar.",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "permissions": [
     "sidebarAction",
     "sidePanel",
@@ -48,9 +51,6 @@
       ]
     }
   ],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
-  },
   "browser_specific_settings": {
     "gecko": {
       "strict_min_version": "109.0"

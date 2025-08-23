@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 export const useUIState = () => {
   const [mode, setMode] = useState('chat');
   const [generationMode, setGenerationMode] = useState('chat');
+  const [canvasMode, setCanvasMode] = useState(false); // New state for canvas mode
   const [showModeMenu, setShowModeMenu] = useState(false);
   const [showTabsMenu, setShowTabsMenu] = useState(false);
   const [availableTabs, setAvailableTabs] = useState([]);
@@ -78,6 +79,8 @@ export const useUIState = () => {
     setMode,
     generationMode,
     setGenerationMode,
+    canvasMode, // Expose canvasMode
+    setCanvasMode, // Expose setCanvasMode
     showModeMenu,
     toggleModeMenu,
     selectMode,
@@ -88,6 +91,24 @@ export const useUIState = () => {
     onSelectModel,
     showModelMenu,
     setShowModelMenu,
-    toggleGenerationMode: () => setGenerationMode(prev => prev === 'chat' ? 'image' : 'chat'),
+    toggleGenerationMode: () => {
+      setGenerationMode(prev => {
+        const newState = prev === 'chat' ? 'image' : 'chat';
+        return newState;
+      });
+      setCanvasMode(false); // Ensure canvas mode is off when toggling image generation
+    },
+    toggleCanvasMode: () => { // New toggle function for canvas mode
+      setCanvasMode(prev => {
+        const newState = !prev;
+        if (newState) {
+          setMode('Canvas'); // Set mode to 'Canvas' when activated
+        } else {
+          setMode('chat'); // Revert to 'chat' mode when deactivated
+        }
+        return newState;
+      });
+      setGenerationMode('chat'); // Ensure generation mode is chat when canvas is active
+    },
   };
 };
